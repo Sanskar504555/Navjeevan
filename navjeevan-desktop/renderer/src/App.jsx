@@ -475,8 +475,8 @@ function LoginView({ onLogin }) {
       const ok = await onLogin(normalizedUsername, password);
       if (!ok) setErr("Incorrect username or password.");
     } catch (error) {
-      // Rejected IPC/API calls must not leave the button permanently disabled.
-      setErr("Unable to sign in. Please try again.");
+      // Display bridge/IPC failures separately from a rejected password.
+      setErr(error instanceof Error ? error.message : "Unable to sign in. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -1549,10 +1549,12 @@ export default function App() {
   const persistPayments = async (next) => { setPayments(next); await storageSet("payments", next); };
 
   const handleLogin = async (username, password) => {
-    try {
-      const api = window?.api;
-      if (typeof api?.login !== "function") return false;
+    const api = window?.api;
+    if (typeof api?.login !== "function") {
+      throw new Error("Sign-in service is unavailable. Start the application through Electron, then try again.");
+    }
 
+    try {
       const user = await api.login(username, password);
       if (!user || typeof user !== "object") return false;
 
@@ -1566,8 +1568,8 @@ export default function App() {
       setBackupsOpen(false);
       return true;
     } catch (error) {
-      // LoginView presents the error and releases its busy state.
-      return false;
+      // LoginView presents this as a service problem, not a bad password.
+      throw new Error("Sign-in service could not be reached. Restart the desktop application and try again.");
     }
   };
   const handleLogout = () => {
