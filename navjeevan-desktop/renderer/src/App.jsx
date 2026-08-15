@@ -59,6 +59,11 @@ const FONTS = (
 --------------------------------------------------------------------- */
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const todayISO = () => new Date().toISOString().slice(0, 10);
+// Vercel serves the renderer in a browser, where Electron's preload bridge
+// is deliberately unavailable. This flag keeps that deployment UI-only.
+const isBrowserPreview = () => (
+  typeof window === "undefined" || typeof window.api?.login !== "function"
+);
 const fmtDate = (d) => {
   if (!d) return "—";
   const dt = new Date(d + "T00:00:00");
@@ -452,7 +457,7 @@ function CycleTable({ label, cycle, editable, onDateChange, onAddRow, onRemoveRo
 /* ---------------------------------------------------------------------
    Login View
 --------------------------------------------------------------------- */
-function LoginView({ onLogin }) {
+function LoginView({ onLogin, previewMode }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
@@ -501,7 +506,11 @@ function LoginView({ onLogin }) {
             <Baby size={20} /><span className="text-sm font-semibold">Navjeevan Fertility &amp; IVF Center</span>
           </div>
           <h2 className="text-xl font-semibold mb-1" style={{ color: C.ink }}>Sign in</h2>
-          <p className="text-sm mb-6" style={{ color: C.inkMuted }}>Staff access only. Patient data is confidential and stored only on this computer.</p>
+          <p className="text-sm mb-6" style={{ color: C.inkMuted }}>
+            {previewMode
+              ? "UI preview only. Enter any non-empty username and password to explore; changes are not saved."
+              : "Staff access only. Patient data is confidential and stored only on this computer."}
+          </p>
           <form className="flex flex-col gap-3" onSubmit={submit} noValidate>
             <TextField label="Username" value={username} onChange={setUsername} placeholder="admin" />
             <TextField label="Password" type="password" value={password} onChange={setPassword} placeholder="••••••••" />
@@ -518,7 +527,7 @@ function LoginView({ onLogin }) {
 /* ---------------------------------------------------------------------
    Sidebar / Shell
 --------------------------------------------------------------------- */
-function Shell({ user, view, setView, onLogout, onOpenChangePassword, onOpenBackups, children, mobileOpen, setMobileOpen }) {
+function Shell({ user, view, setView, onLogout, onOpenChangePassword, onOpenBackups, children, mobileOpen, setMobileOpen, previewMode }) {
   const nav = [
     { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { key: "patients", label: "Patients", icon: Users },
@@ -550,12 +559,14 @@ function Shell({ user, view, setView, onLogout, onOpenChangePassword, onOpenBack
         <div className="px-5 py-4 flex flex-col gap-2" style={{ borderTop: "1px solid rgba(255,255,255,0.12)" }}>
           <p className="text-xs font-medium">{user.fullName}</p>
           <p className="text-[11px] opacity-60 mb-1">{user.role}</p>
-          <button onClick={onOpenChangePassword} className="flex items-center gap-2 text-xs opacity-80 hover:opacity-100 text-left">
-            <ShieldCheck size={14} /> Change password
-          </button>
-          <button onClick={onOpenBackups} className="flex items-center gap-2 text-xs opacity-80 hover:opacity-100 text-left">
-            <Database size={14} /> Backups
-          </button>
+          {!previewMode && <>
+            <button onClick={onOpenChangePassword} className="flex items-center gap-2 text-xs opacity-80 hover:opacity-100 text-left">
+              <ShieldCheck size={14} /> Change password
+            </button>
+            <button onClick={onOpenBackups} className="flex items-center gap-2 text-xs opacity-80 hover:opacity-100 text-left">
+              <Database size={14} /> Backups
+            </button>
+          </>}
           <button onClick={onLogout} className="flex items-center gap-2 text-xs opacity-80 hover:opacity-100 text-left">
             <LogOut size={14} /> Sign out
           </button>
@@ -568,7 +579,14 @@ function Shell({ user, view, setView, onLogout, onOpenChangePassword, onOpenBack
           <span className="text-sm font-semibold">Navjeevan EMR</span>
           <div style={{ width: 20 }} />
         </div>
-        <main className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto emr-fade">{children}</main>
+        <main className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto emr-fade">
+          {previewMode && (
+            <div className="mb-5 rounded-xl px-4 py-3 text-sm" style={{ background: C.goldTint, color: C.gold }}>
+              <strong>Preview mode.</strong> Demo-only session; no patient data or changes are stored.
+            </div>
+          )}
+          {children}
+        </main>
       </div>
     </div>
   );
@@ -1504,6 +1522,7 @@ function PaymentModal({ onClose, onSave }) {
    Root App
 --------------------------------------------------------------------- */
 export default function App() {
+  const previewMode = isBrowserPreview();
   const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState(null);
   const [patients, setPatients] = useState([]);
@@ -1551,7 +1570,20 @@ export default function App() {
   const handleLogin = async (username, password) => {
     const api = window?.api;
     if (typeof api?.login !== "function") {
-      throw new Error("Sign-in service is unavailable. Start the application through Electron, then try again.");
+      // Browser deployments (such as Vercel) are UI demonstrations only.
+      // No real password is accepted or sent anywhere in this branch.
+      setCurrentUser({
+        username: username.trim() || "preview",
+        fullName: "Preview User",
+        role: "UI Preview",
+      });
+      setView("dashboard");
+      setSelectedId(null);
+      setEditingPatient(null);
+      setMobileOpen(false);
+      setChangePwOpen(false);
+      setBackupsOpen(false);
+      return true;
     }
 
     try {
@@ -1667,7 +1699,7 @@ export default function App() {
   }
 
   if (!currentUser) {
-    return <div className="emr-root">{FONTS}<LoginView onLogin={handleLogin} /></div>;
+    return <div className="emr-root">{FONTS}<LoginView onLogin={handleLogin} previewMode={previewMode} /></div>;
   }
 
   const selected = patients.find((p) => p.id === selectedId);
@@ -1675,7 +1707,7 @@ export default function App() {
   return (
     <div className="emr-root">
       {FONTS}
-      <Shell user={currentUser} view={view === "patientDetail" || view === "editPatient" ? "patients" : view} setView={(v) => { setView(v); setEditingPatient(null); }} onLogout={handleLogout} onOpenChangePassword={() => setChangePwOpen(true)} onOpenBackups={openBackups} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}>
+      <Shell user={currentUser} view={view === "patientDetail" || view === "editPatient" ? "patients" : view} setView={(v) => { setView(v); setEditingPatient(null); }} onLogout={handleLogout} onOpenChangePassword={() => setChangePwOpen(true)} onOpenBackups={openBackups} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} previewMode={previewMode}>
         {view === "dashboard" && <Dashboard patients={patients} billingItems={billingItems} payments={payments} setView={setView} openPatient={openPatient} />}
         {view === "patients" && <PatientsList patients={patients} openPatient={openPatient} setView={setView} deletePatient={deletePatient} />}
         {view === "newPatient" && <PatientForm onSave={savePatient} onCancel={() => setView("patients")} />}
