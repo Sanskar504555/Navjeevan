@@ -292,7 +292,7 @@ function SectionTitle({ icon: Icon, children, sub }) {
     </div>
   );
 }
-function Btn({ children, onClick, variant = "primary", icon: Icon, size = "md", disabled }) {
+function Btn({ children, onClick, variant = "primary", icon: Icon, size = "md", disabled, type = "button" }) {
   const base = "inline-flex items-center gap-2 rounded-lg font-medium transition disabled:opacity-50";
   const sizes = size === "sm" ? "px-3 py-1.5 text-xs" : "px-4 py-2 text-sm";
   const styles = {
@@ -302,7 +302,7 @@ function Btn({ children, onClick, variant = "primary", icon: Icon, size = "md", 
     subtle: { background: C.primaryTint, color: C.primaryDark },
   }[variant];
   return (
-    <button disabled={disabled} onClick={onClick} className={base + " " + sizes} style={styles}>
+    <button type={type} disabled={disabled} onClick={onClick} className={base + " " + sizes} style={styles}>
       {Icon && <Icon size={size === "sm" ? 14 : 16} />}
       {children}
     </button>
@@ -458,13 +458,28 @@ function LoginView({ onLogin }) {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const submit = async () => {
-    if (!username || !password) return;
+  const submit = async (event) => {
+    event?.preventDefault();
+    if (busy) return;
+
+    const normalizedUsername = username.trim();
+    if (!normalizedUsername || !password) {
+      setErr("Enter both your username and password.");
+      return;
+    }
+
     setBusy(true);
     setErr("");
-    const ok = await onLogin(username, password);
-    setBusy(false);
-    if (!ok) setErr("Incorrect username or password.");
+    try {
+      // Await the parent handler so authentication state updates before unmount.
+      const ok = await onLogin(normalizedUsername, password);
+      if (!ok) setErr("Incorrect username or password.");
+    } catch (error) {
+      // Rejected IPC/API calls must not leave the button permanently disabled.
+      setErr("Unable to sign in. Please try again.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -487,12 +502,13 @@ function LoginView({ onLogin }) {
           </div>
           <h2 className="text-xl font-semibold mb-1" style={{ color: C.ink }}>Sign in</h2>
           <p className="text-sm mb-6" style={{ color: C.inkMuted }}>Staff access only. Patient data is confidential and stored only on this computer.</p>
-          <div className="flex flex-col gap-3">
+          <form className="flex flex-col gap-3" onSubmit={submit} noValidate>
             <TextField label="Username" value={username} onChange={setUsername} placeholder="admin" />
             <TextField label="Password" type="password" value={password} onChange={setPassword} placeholder="••••••••" />
             {err && <p className="text-xs flex items-center gap-1" style={{ color: C.brick }}><AlertCircle size={13} />{err}</p>}
-            <Btn onClick={submit} icon={ShieldCheck} disabled={busy}>{busy ? "Signing in…" : "Sign in"}</Btn>
-          </div>
+            {/* Submitting the form supports both clicking Sign in and pressing Enter. */}
+            <Btn type="submit" icon={ShieldCheck} disabled={busy}>{busy ? "Signing in…" : "Sign in"}</Btn>
+          </form>
         </div>
       </div>
     </div>
@@ -1533,12 +1549,38 @@ export default function App() {
   const persistPayments = async (next) => { setPayments(next); await storageSet("payments", next); };
 
   const handleLogin = async (username, password) => {
-    const u = await window.api.login(username, password);
-    if (!u) return false;
-    setCurrentUser(u);
-    return true;
+    try {
+      const api = window?.api;
+      if (typeof api?.login !== "function") return false;
+
+      const user = await api.login(username, password);
+      if (!user || typeof user !== "object") return false;
+
+      // Do not rely on the initial route: reset the authenticated UI explicitly.
+      setCurrentUser(user);
+      setView("dashboard");
+      setSelectedId(null);
+      setEditingPatient(null);
+      setMobileOpen(false);
+      setChangePwOpen(false);
+      setBackupsOpen(false);
+      return true;
+    } catch (error) {
+      // LoginView presents the error and releases its busy state.
+      return false;
+    }
   };
-  const handleLogout = () => { setCurrentUser(null); setView("dashboard"); };
+  const handleLogout = () => {
+    // Clear user-specific navigation and overlays so they cannot reappear on re-login.
+    setCurrentUser(null);
+    setView("dashboard");
+    setSelectedId(null);
+    setEditingPatient(null);
+    setMobileOpen(false);
+    setSemenModalFor(null);
+    setChangePwOpen(false);
+    setBackupsOpen(false);
+  };
   const handleChangePassword = async (current, next) => {
     const verified = await window.api.login(currentUser.username, current);
     if (!verified) return false;
