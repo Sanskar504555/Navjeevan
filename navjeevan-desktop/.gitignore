@@ -1,0 +1,7 @@
+node_modules/
+dist-installer/
+renderer/bundle.js
+renderer/styles.css
+test/.tmp-test-run/
+*.log
+.DS_Store
