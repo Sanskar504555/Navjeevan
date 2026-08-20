@@ -1552,19 +1552,34 @@ export default function App() {
   const persistPayments = async (next) => { setPayments(next); await storageSet("payments", next); };
 
   const handleLogin = async (username, password) => {
-    const api = window?.api;
-    try {
-      const user = await api.login(username, password);
-      if (!user || typeof user !== "object") return false;
+  const api = window?.api;
 
-      // Do not rely on the initial route: reset the authenticated UI explicitly.
-      setCurrentUser(user);
-      setView("dashboard");
-      setSelectedId(null);
-      setEditingPatient(null);
-      setMobileOpen(false);
-      setChangePwOpen(false);
-      setBackupsOpen(false);
+  // Web/Vercel preview mode
+  if (typeof api?.login !== "function") {
+    setCurrentUser({
+      username: username.trim() || "preview",
+      fullName: "Preview User",
+      role: "UI Preview",
+    });
+    setView("dashboard");
+    setSelectedId(null);
+    setEditingPatient(null);
+    setMobileOpen(false);
+    setBackupsOpen(false);
+    return true;
+  }
+
+  try {
+    const user = await api.login(username, password);
+    if (!user || typeof user !== "object") return false;
+
+    setCurrentUser(user);
+    setView("dashboard");
+    setSelectedId(null);
+    setEditingPatient(null);
+    setMobileOpen(false);
+    setBackupsOpen(false);
+    return true;
       return true;
     } catch (error) {
       // LoginView presents this as a service problem, not a bad password.
