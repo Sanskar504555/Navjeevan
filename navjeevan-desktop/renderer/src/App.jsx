@@ -1609,11 +1609,14 @@ export default function App() {
   };
   const handleChangePassword = async (current, next) => {
   try {
-    await window.api.changePassword(current, next);
+    const result = await window.api.changePassword(current, next);
+
+    if (!result) {
+      return false;
+    }
 
     showToast("Password updated.");
     setChangePwOpen(false);
-
     return true;
   } catch (error) {
     console.error("Change password failed:", error);
