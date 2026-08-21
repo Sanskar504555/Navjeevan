@@ -537,8 +537,9 @@ function Shell({ user, view, setView, onLogout, onOpenChangePassword, onOpenBack
   style={{
     background: C.primaryDark,
     color: "#fff"
-  }}>
-
+  }}
+>
+  
         <div className="flex items-center gap-2 px-5 py-5" style={{ borderBottom: "1px solid rgba(255,255,255,0.12)" }}>
           <Baby size={20} />
           <div className="leading-tight">
