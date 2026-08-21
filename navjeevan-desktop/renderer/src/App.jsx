@@ -527,8 +527,18 @@ function Shell({ user, view, setView, onLogout, onOpenChangePassword, onOpenBack
   ];
   return (
     <div className="min-h-screen flex" style={{ background: C.bg }}>
-      <aside className={"fixed md:static z-40 top-0 left-0 h-full md:h-auto w-64 md:w-60 flex-col shrink-0 transition-transform no-print " + (mobileOpen ? "translate-x-0 flex" : "-translate-x-full md:translate-x-0 md:flex")}
-        style={{ background: C.primaryDark, color: "#fff" }}>
+      <aside
+  className={
+    "fixed md:sticky md:top-0 z-40 top-0 left-0 h-screen w-64 md:w-60 flex-col shrink-0 transition-transform no-print " +
+    (mobileOpen
+      ? "translate-x-0 flex"
+      : "-translate-x-full md:translate-x-0 md:flex")
+  }
+  style={{
+    background: C.primaryDark,
+    color: "#fff"
+  }}>
+
         <div className="flex items-center gap-2 px-5 py-5" style={{ borderBottom: "1px solid rgba(255,255,255,0.12)" }}>
           <Baby size={20} />
           <div className="leading-tight">
@@ -577,7 +587,7 @@ function Shell({ user, view, setView, onLogout, onOpenChangePassword, onOpenBack
   );
 }
 
-function ChangePasswordModal({ username, onClose, onSave }) {
+function ChangePasswordModal({  onClose, onSave }) {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -1598,13 +1608,18 @@ export default function App() {
     setBackupsOpen(false);
   };
   const handleChangePassword = async (current, next) => {
-    const verified = await window.api.login(currentUser.username, current);
-    if (!verified) return false;
-    await window.api.changePassword(currentUser.username, next);
+  try {
+    await window.api.changePassword(current, next);
+
     showToast("Password updated.");
     setChangePwOpen(false);
+
     return true;
-  };
+  } catch (error) {
+    console.error("Change password failed:", error);
+    return false;
+  }
+};
 
   const refreshBackups = async () => setBackupsList(await window.api.backupList());
   const openBackups = async () => { await refreshBackups(); setBackupsOpen(true); };
@@ -1718,7 +1733,10 @@ export default function App() {
         <ReportPickerModal title="Add Semen Analysis Report" fields={["date", "Lab", "Count", "Motility", "Pus Cells"]}
           onClose={() => setSemenModalFor(null)} onSave={(vals) => { addSemenReport(semenModalFor, vals); setSemenModalFor(null); }} />
       )}
-      {changePwOpen && <ChangePasswordModal username={currentUser.username} onClose={() => setChangePwOpen(false)} onSave={handleChangePassword} />}
+      {changePwOpen && <ChangePasswordModal
+  onClose={() => setChangePwOpen(false)}
+  onSave={handleChangePassword}
+/> }
       {backupsOpen && (
         <BackupsModal onClose={() => setBackupsOpen(false)} backups={backupsList} onRun={runBackupNow} onRestore={restoreBackup}
           onOpenFolder={() => window.api.backupOpenFolder()} busy={backupBusy} />
