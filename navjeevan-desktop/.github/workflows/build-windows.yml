@@ -1,0 +1,37 @@
+name: Build Windows Installer
+
+# Produces a ready-to-run Navjeevan EMR installer (.exe) as a downloadable
+# build artifact, without needing a Windows machine of your own.
+#
+# Usage:
+#   1. Push this project to a GitHub repository (private is fine).
+#   2. Go to the "Actions" tab and run this workflow (or push to main).
+#   3. When it finishes, open the run and download the "navjeevan-emr-windows-installer"
+#      artifact — that's the .exe to hand to the clinic.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies (also rebuilds native modules for Electron)
+        run: npm install
+
+      - name: Build renderer + installer
+        run: npm run dist
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: navjeevan-emr-windows-installer
+          path: dist-installer/*.exe
