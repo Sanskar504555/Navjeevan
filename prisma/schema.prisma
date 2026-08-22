@@ -1,0 +1,84 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ADMIN
+  DOCTOR
+  LAB_TECH
+  STAFF
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum ReportStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+model User {
+  id           String       @id @default(uuid())
+  fullName     String       @map("full_name")
+  email        String       @unique
+  passwordHash String       @map("password_hash")
+  role         Role         @default(STAFF)
+  reports      TestReport[]
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+model Patient {
+  id        String       @id @default(uuid())
+  patientId String       @unique @map("patient_id")
+  fullName  String       @map("full_name")
+  age       Int?
+  gender    Gender?
+  phone     String?
+  email     String?
+  // Full patient intake record from the EMR registration form (history,
+  // exam findings, hormone panels, husband's investigations, treatment
+  // cycles, etc). The form captures far more than the columns above, so
+  // the complete object is kept here as-is; the columns above exist only
+  // for indexing/search. See api/patients for read/write shape.
+  data      Json         @default("{}")
+  reports   TestReport[]
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  @@map("patients")
+}
+
+model TestReport {
+  id        String       @id @default(uuid())
+  patientId String       @map("patient_id")
+  createdBy String       @map("created_by")
+  testType  String       @map("test_type")
+  results   Json         @default("{}")
+  status    ReportStatus @default(PENDING)
+  patient   Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  creator   User         @relation(fields: [createdBy], references: [id])
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  @@map("test_reports")
+}
+
+model SyncLog {
+  id           String   @id @default(uuid())
+  deviceId     String   @map("device_id")
+  lastSyncedAt DateTime @default(now()) @map("last_synced_at")
+
+  @@map("sync_logs")
+}

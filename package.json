@@ -1,0 +1,34 @@
+{
+  "name": "navjeevan-desktop",
+  "version": "1.0.0",
+  "description": "Navjeevan Desktop Application",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "vite --config renderer/vite.config.js",
+    "build": "vite build --config renderer/vite.config.js",
+    "postinstall": "prisma generate",
+    "vercel-build": "prisma generate && vite build --config renderer/vite.config.js",
+    "db:push": "prisma db push",
+    "db:seed-admin": "node scripts/seed-admin.js"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "@vitejs/plugin-react": "^6.1.0",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.6.1",
+    "jsonwebtoken": "^9.0.2",
+    "lodash": "^4.18.1",
+    "lucide-react": "^1.33.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "recharts": "^3.10.1",
+    "vite": "^8.2.2"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.5.4",
+    "postcss": "^8.5.26",
+    "prisma": "6.19.3",
+    "tailwindcss": "^3.4.19"
+  }
+}
