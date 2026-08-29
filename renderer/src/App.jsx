@@ -231,13 +231,13 @@ function blankPatient() {
     },
     invest: {
       hb: "", urine: "", esr: "", blGroup: "",
-      bslType: "", bsl: "",
+      bslFasting: "", bslPP: "", bslRandom: "",
       vdrl: "", hiv: "", hbsAg: "",
       srCreatinine: "", srInsulin: "", homaGlucose: "", homaIR: "",
       rubella: "", papSmear: "", apla: "",
       misc: "",
     },
-    hormonePanels: { initial: blankHormonePanel(), repeat: blankHormonePanel() },
+    hormonePanels: [blankHormonePanelEntry()],
     laparoscopy: { date: "", findings: "" },
     hsg: { date: "", findings: "" },
     hysteroscopy: { date: "", findings: "" },
@@ -247,7 +247,7 @@ function blankPatient() {
       habitsHistory: "", genitalExam: "", miscInvestigations: "", semenAnalysis: [],
       invest: {
         hb: "", urine: "", esr: "", blGroup: "",
-        bslType: "", bsl: "",
+        bslFasting: "", bslPP: "", bslRandom: "",
         vdrl: "", hiv: "", hbsAg: "",
         srCreatinine: "", srInsulin: "", homaGlucose: "", homaIR: "",
         misc: "",
@@ -258,19 +258,75 @@ function blankPatient() {
     treatmentType: "Undecided",
     status: "Active",
     nextFollowUp: "",
-    paperCycles: { cycle1: blankPaperCycle(), cycle2: blankPaperCycle(), cycle3: blankPaperCycle() },
+    cycles: [blankPaperCycle()],
     createdAt: new Date().toISOString(),
   };
 }
 
+/* Cap: at most 3 hormone assay tables / 6 monitoring cycles per patient
+   (see MAX_HORMONE_PANELS / MAX_CYCLES below, used by the Add buttons). */
 function blankHormonePanel() {
   return _.fromPairs(HORMONE_KEYS.map(([k]) => [k, { date: "", day: "", result: "", lab: "" }]));
+}
+function blankHormonePanelEntry() {
+  return { id: uid(), panel: blankHormonePanel() };
 }
 function blankCycleRow() {
   return { id: uid(), date: "", day: "", e2: "", end: "", rtOv: "", ltOv: "", adv: "" };
 }
 function blankPaperCycle() {
-  return { date: "", rows: Array.from({ length: 9 }, blankCycleRow) };
+  return { id: uid(), date: "", rows: Array.from({ length: 9 }, blankCycleRow) };
+}
+const MAX_HORMONE_PANELS = 3;
+const MAX_CYCLES = 6;
+
+/* Migrates a patient record saved under an older schema onto the current
+   one: paperCycles {cycle1,cycle2,cycle3} -> cycles: [...] (dynamic,
+   max 6); hormonePanels {initial,repeat} -> hormonePanels: [...] (dynamic,
+   max 3, "Recepit" retired); invest.bslType/bsl -> the three separate
+   Fasting/PP/Random Sugar fields. Only touches records that still have the
+   old shape — a record already on the new shape passes through untouched. */
+function migrateLegacyShapes(p) {
+  if (!p || typeof p !== "object") return p;
+  const out = { ...p };
+
+  if (!Array.isArray(out.cycles)) {
+    const legacy = out.paperCycles && typeof out.paperCycles === "object"
+      ? ["cycle1", "cycle2", "cycle3"].map((k) => out.paperCycles[k]).filter(Boolean)
+      : [];
+    out.cycles = legacy.length
+      ? legacy.map((c) => ({ id: uid(), date: c.date || "", rows: c.rows && c.rows.length ? c.rows : Array.from({ length: 9 }, blankCycleRow) }))
+      : [blankPaperCycle()];
+  }
+  delete out.paperCycles;
+
+  if (!Array.isArray(out.hormonePanels)) {
+    const hp = out.hormonePanels && typeof out.hormonePanels === "object" ? out.hormonePanels : {};
+    const legacy = [hp.initial, hp.repeat].filter(Boolean);
+    out.hormonePanels = legacy.length
+      ? legacy.map((panel) => ({ id: uid(), panel }))
+      : [blankHormonePanelEntry()];
+  }
+
+  const migrateBSL = (invest) => {
+    if (!invest || (invest.bslType === undefined && invest.bsl === undefined)) return invest;
+    if (invest.bslFasting !== undefined || invest.bslPP !== undefined || invest.bslRandom !== undefined) return invest;
+    const next = { ...invest };
+    const type = (invest.bslType || "").toLowerCase();
+    const val = invest.bsl || "";
+    if (val) {
+      if (type.includes("pp")) next.bslPP = val;
+      else if (type.includes("random")) next.bslRandom = val;
+      else next.bslFasting = val; // "Fasting Sugar" or unspecified — keep the value rather than drop it
+    }
+    delete next.bslType;
+    delete next.bsl;
+    return next;
+  };
+  if (out.invest) out.invest = migrateBSL(out.invest);
+  if (out.husband?.invest) out.husband = { ...out.husband, invest: migrateBSL(out.husband.invest) };
+
+  return out;
 }
 
 /* Fills in any field this update introduced (husband.invest, TVS sub-fields,
@@ -281,7 +337,8 @@ function blankPaperCycle() {
    never gets padded back out with blank rows. */
 function normalizePatient(p) {
   if (!p) return blankPatient();
-  return _.mergeWith({}, blankPatient(), p, (destVal, srcVal) => {
+  const migrated = migrateLegacyShapes(p);
+  return _.mergeWith({}, blankPatient(), migrated, (destVal, srcVal) => {
     if (Array.isArray(destVal)) return srcVal === undefined ? destVal : srcVal;
   });
 }
@@ -296,7 +353,7 @@ const EXAM_FIELDS = [
 ];
 const INVEST_FIELDS = [
   ["hb", "Hb"], ["urine", "Urine"], ["esr", "ESR"], ["blGroup", "Bl. Group"],
-  ["bslType", "BSL Type"], ["bsl", "BSL (mg/dL)"],
+  ["bslFasting", "BSL — Fasting Sugar"], ["bslPP", "BSL — PP Sugar"], ["bslRandom", "BSL — Random Sugar"],
   ["vdrl", "VDRL"], ["hiv", "HIV"], ["hbsAg", "HBs Ag"],
   ["srCreatinine", "Sr. Creatinine"], ["srInsulin", "Sr. Insulin"],
   ["homaGlucose", "Fasting Glucose (HOMA-IR)"], ["homaIR", "HOMA-IR"],
@@ -316,7 +373,6 @@ const TYPE_INFERTILITY_OPTIONS = ["Primary", "Secondary", "Secondary with BOH"];
 const MENSTRUAL_HISTORY_OPTIONS = ["Regular", "Irregular"];
 const PRESENT_ABSENT_OPTIONS = ["Present", "Absent"];
 const NORMAL_ABNORMAL_OPTIONS = ["Normal", "Abnormal"];
-const BSL_TYPE_OPTIONS = ["Fasting Sugar", "PP Sugar", "Random Sugar"];
 const HORMONE_KEYS = [
   ["fsh", "FSH", "mIU/ml"], ["lh", "L.H.", "mIU/ml"], ["prolactin", "Prolactin", "ng/ml"],
   ["tsh", "TSH", "uIU/ml"], ["t4", "T4", "mcg/dl"], ["amh", "AMH", "ng/nl"],
@@ -573,10 +629,13 @@ function Toast({ toast }) {
 
 /* Hormone panel table — mirrors the paper's "Hormone Assays" / "Recepit" tables
    (one row per Serum marker, each with its own Date / Day of Cycle / Result / Lab). */
-function HormoneTable({ title, panel, editable, onChange }) {
+function HormoneTable({ title, panel, editable, onChange, onRemove }) {
   return (
     <div className="rounded-xl p-3" style={{ background: C.slateTint }}>
-      <p className="text-xs font-semibold mb-2" style={{ color: C.primaryDark }}>{title}</p>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold" style={{ color: C.primaryDark }}>{title}</p>
+        {onRemove && <button type="button" onClick={onRemove}><Trash2 size={13} style={{ color: C.inkFaint }} /></button>}
+      </div>
       <div className="overflow-x-auto emr-scroll">
         <table className="w-full text-sm">
           <thead>
@@ -626,11 +685,14 @@ function HormoneTable({ title, panel, editable, onChange }) {
 }
 
 /* Cycle monitoring grid — mirrors the paper's "Cycle No. 1 / 2 / 3" tables. */
-function CycleTable({ label, cycle, editable, onDateChange, onAddRow, onRemoveRow, onUpdateRow }) {
+function CycleTable({ label, cycle, editable, onDateChange, onAddRow, onRemoveRow, onUpdateRow, onRemoveCycle }) {
   return (
     <div className="rounded-xl p-3" style={{ background: C.slateTint }}>
       <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-        <p className="text-sm font-semibold" style={{ color: C.primaryDark }}>{label}</p>
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-semibold" style={{ color: C.primaryDark }}>{label}</p>
+          {onRemoveCycle && <button type="button" onClick={onRemoveCycle}><Trash2 size={13} style={{ color: C.inkFaint }} /></button>}
+        </div>
         {editable ? (
           <div className="flex items-center gap-2">
             <span className="text-xs" style={{ color: C.inkFaint }}>Date</span>
@@ -1130,16 +1192,29 @@ function PatientForm({ initial, onSave, onCancel }) {
     { key: "plan", label: "Diagnosis & Plan" },
   ];
 
-  const updHormonePanel = (panelKey, hormoneKey, field, val) => setData((prev) => _.set(_.cloneDeep(prev), `hormonePanels.${panelKey}.${hormoneKey}.${field}`, val));
+  const updHormonePanel = (panelId, hormoneKey, field, val) => setData((prev) => ({
+    ...prev,
+    hormonePanels: prev.hormonePanels.map((entry) => entry.id === panelId
+      ? { ...entry, panel: { ...entry.panel, [hormoneKey]: { ...entry.panel[hormoneKey], [field]: val } } }
+      : entry),
+  }));
+  const addHormonePanel = () => setData((prev) => (
+    prev.hormonePanels.length >= MAX_HORMONE_PANELS ? prev : { ...prev, hormonePanels: [...prev.hormonePanels, blankHormonePanelEntry()] }
+  ));
+  const removeHormonePanel = (panelId) => setData((prev) => (
+    prev.hormonePanels.length <= 1 ? prev : { ...prev, hormonePanels: prev.hormonePanels.filter((entry) => entry.id !== panelId) }
+  ));
+
+  const setCycleDate = (cycleId, val) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, date: val } : c) }));
+  const addCycleRow = (cycleId) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, rows: [...c.rows, blankCycleRow()] } : c) }));
+  const rmCycleRow = (cycleId, rowId) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, rows: c.rows.filter((r) => r.id !== rowId) } : c) }));
+  const updCycleRow = (cycleId, rowId, field, val) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, rows: c.rows.map((r) => r.id === rowId ? { ...r, [field]: val } : r) } : c) }));
+  const addCycle = () => setData((prev) => (prev.cycles.length >= MAX_CYCLES ? prev : { ...prev, cycles: [...prev.cycles, blankPaperCycle()] }));
+  const removeCycle = (cycleId) => setData((prev) => (prev.cycles.length <= 1 ? prev : { ...prev, cycles: prev.cycles.filter((c) => c.id !== cycleId) }));
 
   const addSemenRow = () => setData((prev) => ({ ...prev, husband: { ...prev.husband, semenAnalysis: [...prev.husband.semenAnalysis, { id: uid(), date: todayISO(), lab: "", count: "", motility: "", pusCells: "" }] } }));
   const rmSemenRow = (id) => setData((prev) => ({ ...prev, husband: { ...prev.husband, semenAnalysis: prev.husband.semenAnalysis.filter((r) => r.id !== id) } }));
   const updSemenRow = (id, key, val) => setData((prev) => ({ ...prev, husband: { ...prev.husband, semenAnalysis: prev.husband.semenAnalysis.map((r) => r.id === id ? { ...r, [key]: val } : r) } }));
-
-  const setCycleDate = (cycleKey, val) => set(`paperCycles.${cycleKey}.date`, val);
-  const addCycleRow = (cycleKey) => setData((prev) => ({ ...prev, paperCycles: { ...prev.paperCycles, [cycleKey]: { ...prev.paperCycles[cycleKey], rows: [...prev.paperCycles[cycleKey].rows, blankCycleRow()] } } }));
-  const rmCycleRow = (cycleKey, rowId) => setData((prev) => ({ ...prev, paperCycles: { ...prev.paperCycles, [cycleKey]: { ...prev.paperCycles[cycleKey], rows: prev.paperCycles[cycleKey].rows.filter((r) => r.id !== rowId) } } }));
-  const updCycleRow = (cycleKey, rowId, field, val) => setData((prev) => ({ ...prev, paperCycles: { ...prev.paperCycles, [cycleKey]: { ...prev.paperCycles[cycleKey], rows: prev.paperCycles[cycleKey].rows.map((r) => r.id === rowId ? { ...r, [field]: val } : r) } } }));
 
   return (
     <div className="flex flex-col gap-5">
@@ -1243,8 +1318,12 @@ function PatientForm({ initial, onSave, onCancel }) {
               <TextField label="Urine" value={data.invest.urine} onChange={(v) => set("invest.urine", v)} />
               <TextField label="ESR" value={data.invest.esr} onChange={(v) => set("invest.esr", v)} />
               <TextField label="Bl. Group" value={data.invest.blGroup} onChange={(v) => set("invest.blGroup", v)} />
-              <SelectField label="BSL Type" value={data.invest.bslType} onChange={(v) => set("invest.bslType", v)} options={BSL_TYPE_OPTIONS} placeholder="Select…" />
-              <TextField label="BSL (mg/dL)" value={data.invest.bsl} onChange={(v) => set("invest.bsl", v)} />
+              <div className="col-span-full -mb-1 mt-1">
+                <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>BSL</p>
+              </div>
+              <TextField label="Fasting Sugar (mg/dL)" value={data.invest.bslFasting} onChange={(v) => set("invest.bslFasting", v)} />
+              <TextField label="PP Sugar (mg/dL)" value={data.invest.bslPP} onChange={(v) => set("invest.bslPP", v)} />
+              <TextField label="Random Sugar (mg/dL)" value={data.invest.bslRandom} onChange={(v) => set("invest.bslRandom", v)} />
               <TextField label="VDRL" value={data.invest.vdrl} onChange={(v) => set("invest.vdrl", v)} />
               <TextField label="HIV" value={data.invest.hiv} onChange={(v) => set("invest.hiv", v)} />
               <TextField label="HBs Ag" value={data.invest.hbsAg} onChange={(v) => set("invest.hbsAg", v)} />
@@ -1264,10 +1343,18 @@ function PatientForm({ initial, onSave, onCancel }) {
       {tab === "imaging" && (
         <Card className="p-5 flex flex-col gap-6">
           <div>
-            <SectionTitle icon={FlaskConical} sub="Blood / hormone reports — as on the OPD chart">Hormone Assays</SectionTitle>
+            <div className="flex items-center justify-between mb-3">
+              <SectionTitle icon={FlaskConical} sub="Blood / hormone reports — as on the OPD chart">Hormone Assays</SectionTitle>
+              {data.hormonePanels.length < MAX_HORMONE_PANELS && (
+                <Btn size="sm" variant="subtle" icon={Plus} onClick={addHormonePanel}>Add Table</Btn>
+              )}
+            </div>
             <div className="flex flex-col gap-4">
-              <HormoneTable title="Hormone Assays" panel={data.hormonePanels.initial} editable onChange={(k, f, v) => updHormonePanel("initial", k, f, v)} />
-              <HormoneTable title="Recepit (Repeat)" panel={data.hormonePanels.repeat} editable onChange={(k, f, v) => updHormonePanel("repeat", k, f, v)} />
+              {data.hormonePanels.map((entry, i) => (
+                <HormoneTable key={entry.id} title={`Hormone Assays — Table ${i + 1}`} panel={entry.panel} editable
+                  onChange={(k, f, v) => updHormonePanel(entry.id, k, f, v)}
+                  onRemove={data.hormonePanels.length > 1 ? () => removeHormonePanel(entry.id) : undefined} />
+              ))}
             </div>
           </div>
           <div>
@@ -1302,8 +1389,12 @@ function PatientForm({ initial, onSave, onCancel }) {
               <TextField label="Urine" value={data.husband.invest.urine} onChange={(v) => set("husband.invest.urine", v)} />
               <TextField label="ESR" value={data.husband.invest.esr} onChange={(v) => set("husband.invest.esr", v)} />
               <TextField label="Bl. Group" value={data.husband.invest.blGroup} onChange={(v) => set("husband.invest.blGroup", v)} />
-              <SelectField label="BSL Type" value={data.husband.invest.bslType} onChange={(v) => set("husband.invest.bslType", v)} options={BSL_TYPE_OPTIONS} placeholder="Select…" />
-              <TextField label="BSL (mg/dL)" value={data.husband.invest.bsl} onChange={(v) => set("husband.invest.bsl", v)} />
+              <div className="col-span-full -mb-1 mt-1">
+                <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>BSL</p>
+              </div>
+              <TextField label="Fasting Sugar (mg/dL)" value={data.husband.invest.bslFasting} onChange={(v) => set("husband.invest.bslFasting", v)} />
+              <TextField label="PP Sugar (mg/dL)" value={data.husband.invest.bslPP} onChange={(v) => set("husband.invest.bslPP", v)} />
+              <TextField label="Random Sugar (mg/dL)" value={data.husband.invest.bslRandom} onChange={(v) => set("husband.invest.bslRandom", v)} />
               <TextField label="VDRL" value={data.husband.invest.vdrl} onChange={(v) => set("husband.invest.vdrl", v)} />
               <TextField label="HIV" value={data.husband.invest.hiv} onChange={(v) => set("husband.invest.hiv", v)} />
               <TextField label="HBs Ag" value={data.husband.invest.hbsAg} onChange={(v) => set("husband.invest.hbsAg", v)} />
@@ -1360,17 +1451,19 @@ function PatientForm({ initial, onSave, onCancel }) {
             </div>
           </div>
           <div>
-            <SectionTitle icon={CalendarClock} sub="OPD monitoring chart, as printed on the paper form">Cycle Monitoring — Cycle No. 1, 2 & 3</SectionTitle>
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <SectionTitle icon={CalendarClock} sub="OPD monitoring chart, as printed on the paper form">Cycle Monitoring</SectionTitle>
+              {data.cycles.length < MAX_CYCLES && (
+                <Btn size="sm" variant="subtle" icon={Plus} onClick={addCycle}>Add Cycle</Btn>
+              )}
+            </div>
             <div className="flex flex-col gap-4">
-              <CycleTable label="Cycle No. 1" cycle={data.paperCycles.cycle1} editable
-                onDateChange={(v) => setCycleDate("cycle1", v)} onAddRow={() => addCycleRow("cycle1")}
-                onRemoveRow={(id) => rmCycleRow("cycle1", id)} onUpdateRow={(id, f, v) => updCycleRow("cycle1", id, f, v)} />
-              <CycleTable label="Cycle No. 2" cycle={data.paperCycles.cycle2} editable
-                onDateChange={(v) => setCycleDate("cycle2", v)} onAddRow={() => addCycleRow("cycle2")}
-                onRemoveRow={(id) => rmCycleRow("cycle2", id)} onUpdateRow={(id, f, v) => updCycleRow("cycle2", id, f, v)} />
-              <CycleTable label="Cycle No. 3" cycle={data.paperCycles.cycle3} editable
-                onDateChange={(v) => setCycleDate("cycle3", v)} onAddRow={() => addCycleRow("cycle3")}
-                onRemoveRow={(id) => rmCycleRow("cycle3", id)} onUpdateRow={(id, f, v) => updCycleRow("cycle3", id, f, v)} />
+              {data.cycles.map((c, i) => (
+                <CycleTable key={c.id} label={`Cycle No. ${i + 1}`} cycle={c} editable
+                  onDateChange={(v) => setCycleDate(c.id, v)} onAddRow={() => addCycleRow(c.id)}
+                  onRemoveRow={(id) => rmCycleRow(c.id, id)} onUpdateRow={(id, f, v) => updCycleRow(c.id, id, f, v)}
+                  onRemoveCycle={data.cycles.length > 1 ? () => removeCycle(c.id) : undefined} />
+              ))}
             </div>
           </div>
         </Card>
@@ -1471,11 +1564,11 @@ function PatientDetail({ patient, prescriptions, cycles, billingItems, payments,
               <div><p className="text-xs mb-1" style={{ color: C.inkFaint }}>Plan of Management</p><p style={{ color: C.ink }}>{patient.planOfManagement || "—"}</p></div>
               <div><p className="text-xs mb-1" style={{ color: C.inkFaint }}>Next Follow-up</p><p style={{ color: C.ink }}>{fmtDate(patient.nextFollowUp)}</p></div>
             </div>
-            <SectionTitle icon={CalendarClock} sub="OPD monitoring chart">Cycle Monitoring — Cycle No. 1, 2 & 3</SectionTitle>
+            <SectionTitle icon={CalendarClock} sub="OPD monitoring chart">Cycle Monitoring</SectionTitle>
             <div className="flex flex-col gap-4">
-              <CycleTable label="Cycle No. 1" cycle={patient.paperCycles.cycle1} />
-              <CycleTable label="Cycle No. 2" cycle={patient.paperCycles.cycle2} />
-              <CycleTable label="Cycle No. 3" cycle={patient.paperCycles.cycle3} />
+              {patient.cycles.map((c, i) => (
+                <CycleTable key={c.id} label={`Cycle No. ${i + 1}`} cycle={c} />
+              ))}
             </div>
           </Card>
         </div>
@@ -1489,8 +1582,9 @@ function PatientDetail({ patient, prescriptions, cycles, billingItems, payments,
               <Btn size="sm" variant="ghost" icon={Pencil} onClick={onEdit}>Edit Reports</Btn>
             </div>
             <div className="flex flex-col gap-4">
-              <HormoneTable title="Hormone Assays" panel={patient.hormonePanels.initial} />
-              <HormoneTable title="Recepit (Repeat)" panel={patient.hormonePanels.repeat} />
+              {patient.hormonePanels.map((entry, i) => (
+                <HormoneTable key={entry.id} title={`Hormone Assays — Table ${i + 1}`} panel={entry.panel} />
+              ))}
             </div>
           </Card>
           <Card className="p-5">
