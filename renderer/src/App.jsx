@@ -4,7 +4,8 @@ import {
   LayoutDashboard, Users, UserPlus, LogOut, Search, Plus, X, Save,
   ChevronLeft, Pill, TestTube2, Baby, ClipboardList, Trash2, Pencil,
   ArrowLeft, AlertCircle, Clock, CheckCircle2, Menu, ShieldCheck,
-  FlaskConical, Stethoscope, CalendarClock, Receipt, IndianRupee, Database
+  FlaskConical, Stethoscope, CalendarClock, Receipt, IndianRupee, Database,
+  IdCard, Upload, ImagePlus
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell
@@ -75,6 +76,62 @@ const daysFromToday = (d) => {
   const t = new Date(todayISO() + "T00:00:00");
   return Math.round((dt - t) / 86400000);
 };
+
+/* BMI = weight(kg) / height(m)^2. Sr. Insulin & HOMA-IR: (Insulin uIU/ml x
+   Fasting Glucose mg/dl) / 405 — the standard HOMA-IR formula. Both are
+   derived, read-only display values (recomputed on every change) rather
+   than independently-editable fields, so they can never drift out of sync
+   with the inputs they come from. */
+function calcBMI(heightCm, weightKg) {
+  const h = parseFloat(heightCm), w = parseFloat(weightKg);
+  if (!h || !w) return "";
+  const m = h / 100;
+  const bmi = w / (m * m);
+  return Number.isFinite(bmi) ? bmi.toFixed(1) : "";
+}
+function bmiCategory(bmi) {
+  const v = parseFloat(bmi);
+  if (!v) return "";
+  if (v < 18.5) return "Underweight";
+  if (v < 25) return "Normal";
+  if (v < 30) return "Overweight";
+  return "Obese";
+}
+function calcHOMAIR(insulin, glucose) {
+  const i = parseFloat(insulin), g = parseFloat(glucose);
+  if (!i || !g) return "";
+  const val = (i * g) / 405;
+  return Number.isFinite(val) ? val.toFixed(2) : "";
+}
+
+/* Photo upload: downscaled client-side to a max 480px edge / JPEG q0.82
+   before being stored as a data URL, so a phone photo doesn't balloon the
+   patient's JSON record. */
+function readImageAsDataURL(file, maxDim = 480) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read file"));
+    reader.onload = () => {
+      const img = new window.Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const scale = maxDim / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      };
+      img.onerror = () => resolve(reader.result);
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 /* Desktop build: persistence goes through window.api (Electron preload →
    IPC → local SQLite), not the browser artifact's window.storage. The
@@ -155,6 +212,10 @@ function blankPatient() {
     eduH: "",
     occW: "",
     occH: "",
+    aadhaarW: "",
+    aadhaarH: "",
+    photoW: "",
+    photoH: "",
     diet: "Veg",
     marriedSince: "",
     typeInfertility: "",
@@ -162,15 +223,36 @@ function blankPatient() {
     lmp: "",
     obstetricHistory: "",
     pastFamilyHistory: "",
-    exam: { stature: "", height: "", weight: "", bmi: "", thyroid: "", hirsutism: "", brSecretions: "", secSexChar: "", bp: "", tvs: "", rs: "", cvs: "" },
-    invest: { hb: "", urine: "", esr: "", hiv: "", blGroup: "", bsl: "", hbsAg: "", srCreatinine: "", srInsulin: "", misc: "" },
+    exam: {
+      stature: "", height: "", weight: "", bmi: "",
+      thyroid: "", hirsutism: "", brSecretions: "", secSexChar: "",
+      bp: "", tvs: "", tvsUterus: "", tvsEndometrium: "", tvsCavity: "", tvsRightOvary: "", tvsLeftOvary: "",
+      rs: "", cvs: "",
+    },
+    invest: {
+      hb: "", urine: "", esr: "", blGroup: "",
+      bslType: "", bsl: "",
+      vdrl: "", hiv: "", hbsAg: "",
+      srCreatinine: "", srInsulin: "", homaGlucose: "", homaIR: "",
+      rubella: "", papSmear: "", apla: "",
+      misc: "",
+    },
     hormonePanels: { initial: blankHormonePanel(), repeat: blankHormonePanel() },
     laparoscopy: { date: "", findings: "" },
     hsg: { date: "", findings: "" },
     hysteroscopy: { date: "", findings: "" },
     pcr: { date: "", result: "" },
     cbnaat: { date: "", result: "" },
-    husband: { habitsHistory: "", genitalExam: "", miscInvestigations: "", semenAnalysis: [] },
+    husband: {
+      habitsHistory: "", genitalExam: "", miscInvestigations: "", semenAnalysis: [],
+      invest: {
+        hb: "", urine: "", esr: "", blGroup: "",
+        bslType: "", bsl: "",
+        vdrl: "", hiv: "", hbsAg: "",
+        srCreatinine: "", srInsulin: "", homaGlucose: "", homaIR: "",
+        misc: "",
+      },
+    },
     diagnosis: "",
     planOfManagement: "",
     treatmentType: "Undecided",
@@ -191,16 +273,50 @@ function blankPaperCycle() {
   return { date: "", rows: Array.from({ length: 9 }, blankCycleRow) };
 }
 
+/* Fills in any field this update introduced (husband.invest, TVS sub-fields,
+   Aadhaar/photo, etc.) on a patient record saved by an older version of the
+   form, so editing/viewing a pre-existing patient never hits an undefined
+   nested field. Arrays (semen reports, cycle rows) are taken from the real
+   record as-is rather than merged index-by-index, so a shorter/edited list
+   never gets padded back out with blank rows. */
+function normalizePatient(p) {
+  if (!p) return blankPatient();
+  return _.mergeWith({}, blankPatient(), p, (destVal, srcVal) => {
+    if (Array.isArray(destVal)) return srcVal === undefined ? destVal : srcVal;
+  });
+}
+
 const EXAM_FIELDS = [
   ["stature", "Stature"], ["height", "Height (cm)"], ["weight", "Weight (kg)"], ["bmi", "BMI"],
   ["thyroid", "Thyroid"], ["hirsutism", "Hirsutism"], ["brSecretions", "Br. Secretions"], ["secSexChar", "Sec. Sex Characters"],
-  ["bp", "B.P."], ["tvs", "TVS"], ["rs", "R.S."], ["cvs", "C.V.S."],
+  ["bp", "B.P."], ["tvs", "TVS"],
+  ["tvsUterus", "TVS — Uterus"], ["tvsEndometrium", "TVS — Endometrium"], ["tvsCavity", "TVS — Cavity"],
+  ["tvsRightOvary", "TVS — Right Ovary"], ["tvsLeftOvary", "TVS — Left Ovary"],
+  ["rs", "R.S."], ["cvs", "C.V.S."],
 ];
 const INVEST_FIELDS = [
-  ["hb", "Hb"], ["urine", "Urine"], ["esr", "ESR"], ["hiv", "HIV"],
-  ["blGroup", "Bl. Group"], ["bsl", "BSL"], ["hbsAg", "HBs Ag"],
-  ["srCreatinine", "Sr. Creatinine"], ["srInsulin", "Sr. Insulin"], ["misc", "Misc."],
+  ["hb", "Hb"], ["urine", "Urine"], ["esr", "ESR"], ["blGroup", "Bl. Group"],
+  ["bslType", "BSL Type"], ["bsl", "BSL (mg/dL)"],
+  ["vdrl", "VDRL"], ["hiv", "HIV"], ["hbsAg", "HBs Ag"],
+  ["srCreatinine", "Sr. Creatinine"], ["srInsulin", "Sr. Insulin"],
+  ["homaGlucose", "Fasting Glucose (HOMA-IR)"], ["homaIR", "HOMA-IR"],
+  ["rubella", "Rubella"], ["papSmear", "Pap Smear"], ["apla", "APLA"],
+  ["misc", "Misc."],
 ];
+/* Husband's Investigations panel mirrors the wife's, minus the three
+   wife-specific tests (Rubella, Pap Smear, APLA). Derived by filtering
+   rather than duplicated, so the two never drift apart. */
+const INVEST_FIELDS_HUSBAND = INVEST_FIELDS.filter(([k]) => !["rubella", "papSmear", "apla"].includes(k));
+
+const OCCUPATION_OPTIONS = [
+  "Self Employed", "Business", "Private Job", "Government Job", "Housewife",
+  "Worker / Labourer", "Farmer", "Teacher", "Doctor", "Engineer", "Student", "Unemployed", "Retired",
+];
+const TYPE_INFERTILITY_OPTIONS = ["Primary", "Secondary", "Secondary with BOH"];
+const MENSTRUAL_HISTORY_OPTIONS = ["Regular", "Irregular"];
+const PRESENT_ABSENT_OPTIONS = ["Present", "Absent"];
+const NORMAL_ABNORMAL_OPTIONS = ["Normal", "Abnormal"];
+const BSL_TYPE_OPTIONS = ["Fasting Sugar", "PP Sugar", "Random Sugar"];
 const HORMONE_KEYS = [
   ["fsh", "FSH", "mIU/ml"], ["lh", "L.H.", "mIU/ml"], ["prolactin", "Prolactin", "ng/ml"],
   ["tsh", "TSH", "uIU/ml"], ["t4", "T4", "mcg/dl"], ["amh", "AMH", "ng/nl"],
@@ -251,7 +367,7 @@ function TextField({ label, value, onChange, placeholder, type = "text", full })
     </label>
   );
 }
-function SelectField({ label, value, onChange, options, full }) {
+function SelectField({ label, value, onChange, options, full, placeholder }) {
   return (
     <label className={"flex flex-col gap-1 " + (full ? "col-span-full" : "")}>
       <span className="text-xs font-medium" style={{ color: C.inkMuted }}>{label}</span>
@@ -261,9 +377,89 @@ function SelectField({ label, value, onChange, options, full }) {
         className="rounded-lg px-3 py-2 text-sm outline-none"
         style={{ border: `1px solid ${C.border}`, color: C.ink, background: "#fff" }}
       >
+        {placeholder && !value && <option value="" disabled>{placeholder}</option>}
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
       </select>
     </label>
+  );
+}
+/* Text input with a fixed, non-editable unit suffix (e.g. "mm/Hg" for B.P.) */
+function TextFieldWithSuffix({ label, value, onChange, suffix, placeholder }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium" style={{ color: C.inkMuted }}>{label}</span>
+      <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: `1px solid ${C.border}`, background: "#fff" }}>
+        <input
+          value={value || ""}
+          placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)}
+          className="flex-1 text-sm outline-none min-w-0"
+          style={{ color: C.ink, background: "transparent" }}
+        />
+        <span className="text-xs whitespace-nowrap" style={{ color: C.inkFaint }}>{suffix}</span>
+      </div>
+    </label>
+  );
+}
+/* Read-only display for a value this update computes automatically (BMI,
+   HOMA-IR) so it's visually distinct from fields the doctor types into. */
+function ComputedField({ label, value, hint }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium" style={{ color: C.inkMuted }}>{label}</span>
+      <input
+        readOnly
+        value={value || "—"}
+        className="rounded-lg px-3 py-2 text-sm outline-none"
+        style={{ border: `1px solid ${C.border}`, color: C.ink, background: C.slateTint, cursor: "not-allowed" }}
+      />
+      {hint && <span className="text-[11px]" style={{ color: C.inkFaint }}>{hint}</span>}
+    </label>
+  );
+}
+function BMIField({ value }) {
+  return <ComputedField label="BMI (auto-calculated)" value={value} hint={bmiCategory(value) || "weight(kg) ÷ height(m)²"} />;
+}
+function HomaIRField({ value }) {
+  return <ComputedField label="HOMA-IR (auto-calculated)" value={value} hint="(Insulin × Fasting Glucose) ÷ 405" />;
+}
+/* Photo upload — downscales the image client-side (see readImageAsDataURL)
+   and stores it as a data URL, with a thumbnail preview and a way to clear it. */
+function PhotoField({ label, value, onChange }) {
+  const [busy, setBusy] = useState(false);
+  const inputId = useMemo(() => "photo-" + uid(), []);
+  const handleFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setBusy(true);
+    try {
+      const dataUrl = await readImageAsDataURL(file);
+      onChange(dataUrl);
+    } catch (err) {
+      /* ignore — user can retry the upload */
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs font-medium" style={{ color: C.inkMuted }}>{label}</span>
+      <div className="flex items-center gap-3">
+        <div className="rounded-lg overflow-hidden flex items-center justify-center shrink-0"
+          style={{ width: 64, height: 64, background: C.slateTint, border: `1px solid ${C.border}` }}>
+          {value ? <img src={value} alt={label} className="w-full h-full object-cover" /> : <ImagePlus size={20} style={{ color: C.inkFaint }} />}
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor={inputId} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer w-fit"
+            style={{ background: C.primaryTint, color: C.primaryDark }}>
+            <Upload size={13} /> {busy ? "Uploading…" : value ? "Change Photo" : "Upload Photo"}
+          </label>
+          <input id={inputId} type="file" accept="image/*" className="hidden" onChange={handleFile} />
+          {value && <button type="button" onClick={() => onChange("")} className="text-xs text-left" style={{ color: C.brick }}>Remove</button>}
+        </div>
+      </div>
+    </div>
   );
 }
 function DropdownOtherField({ label, value, onChange, options, full }) {
@@ -903,9 +1099,28 @@ function PatientsList({ patients, openPatient, setView, deletePatient }) {
    Patient Form (register / edit)
 --------------------------------------------------------------------- */
 function PatientForm({ initial, onSave, onCancel }) {
-  const [data, setData] = useState(initial || blankPatient());
+  const [data, setData] = useState(() => normalizePatient(initial));
   const [tab, setTab] = useState("basic");
   const set = (path, val) => setData((prev) => _.set(_.cloneDeep(prev), path, val));
+
+  // Height/weight and Sr. Insulin/Fasting Glucose drive the auto-calculated
+  // BMI and HOMA-IR fields, so their setters recompute the derived value in
+  // the same update rather than leaving it to go stale until the next edit.
+  const setExamMeasure = (field, val) => setData((prev) => {
+    const next = _.set(_.cloneDeep(prev), `exam.${field}`, val);
+    next.exam.bmi = calcBMI(next.exam.height, next.exam.weight);
+    return next;
+  });
+  const setWifeHoma = (field, val) => setData((prev) => {
+    const next = _.set(_.cloneDeep(prev), `invest.${field}`, val);
+    next.invest.homaIR = calcHOMAIR(next.invest.srInsulin, next.invest.homaGlucose);
+    return next;
+  });
+  const setHusbandHoma = (field, val) => setData((prev) => {
+    const next = _.set(_.cloneDeep(prev), `husband.invest.${field}`, val);
+    next.husband.invest.homaIR = calcHOMAIR(next.husband.invest.srInsulin, next.husband.invest.homaGlucose);
+    return next;
+  });
 
   const tabs = [
     { key: "basic", label: "Basic Info & History" },
@@ -962,18 +1177,33 @@ function PatientForm({ initial, onSave, onCancel }) {
             <div className="grid sm:grid-cols-3 gap-4">
               <TextField label="Age (Wife)" value={data.ageW} onChange={(v) => set("ageW", v)} />
               <TextField label="Education (Wife)" value={data.eduW} onChange={(v) => set("eduW", v)} />
-              <TextField label="Occupation (Wife)" value={data.occW} onChange={(v) => set("occW", v)} />
+              <DropdownOtherField label="Occupation (Wife)" value={data.occW} onChange={(v) => set("occW", v)} options={OCCUPATION_OPTIONS} />
               <TextField label="Age (Husband)" value={data.ageH} onChange={(v) => set("ageH", v)} />
               <TextField label="Education (Husband)" value={data.eduH} onChange={(v) => set("eduH", v)} />
-              <TextField label="Occupation (Husband)" value={data.occH} onChange={(v) => set("occH", v)} />
+              <DropdownOtherField label="Occupation (Husband)" value={data.occH} onChange={(v) => set("occH", v)} options={OCCUPATION_OPTIONS} />
+            </div>
+          </div>
+          <div>
+            <SectionTitle icon={IdCard}>Identification & Photo</SectionTitle>
+            <div className="grid sm:grid-cols-2 gap-6">
+              <div className="flex flex-col gap-4">
+                <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>Wife</p>
+                <TextField label="Aadhaar Number (Wife)" value={data.aadhaarW} onChange={(v) => set("aadhaarW", v)} placeholder="XXXX XXXX XXXX" />
+                <PhotoField label="Photo (Wife)" value={data.photoW} onChange={(v) => set("photoW", v)} />
+              </div>
+              <div className="flex flex-col gap-4">
+                <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>Husband</p>
+                <TextField label="Aadhaar Number (Husband)" value={data.aadhaarH} onChange={(v) => set("aadhaarH", v)} placeholder="XXXX XXXX XXXX" />
+                <PhotoField label="Photo (Husband)" value={data.photoH} onChange={(v) => set("photoH", v)} />
+              </div>
             </div>
           </div>
           <div>
             <SectionTitle>Fertility & Menstrual History</SectionTitle>
             <div className="grid sm:grid-cols-2 gap-4">
               <TextField label="Married Since" value={data.marriedSince} onChange={(v) => set("marriedSince", v)} />
-              <TextField label="Type of Infertility" value={data.typeInfertility} onChange={(v) => set("typeInfertility", v)} placeholder="Primary / Secondary" />
-              <TextField label="Menstrual History" value={data.menstrualHistory} onChange={(v) => set("menstrualHistory", v)} />
+              <SelectField label="Type of Infertility" value={data.typeInfertility} onChange={(v) => set("typeInfertility", v)} options={TYPE_INFERTILITY_OPTIONS} placeholder="Select…" />
+              <SelectField label="Menstrual History" value={data.menstrualHistory} onChange={(v) => set("menstrualHistory", v)} options={MENSTRUAL_HISTORY_OPTIONS} placeholder="Select…" />
               <TextField label="LMP" type="date" value={data.lmp} onChange={(v) => set("lmp", v)} />
               <TextAreaField label="Obstetric History" value={data.obstetricHistory} onChange={(v) => set("obstetricHistory", v)} full />
               <TextAreaField label="Past / Family History" value={data.pastFamilyHistory} onChange={(v) => set("pastFamilyHistory", v)} full />
@@ -987,17 +1217,45 @@ function PatientForm({ initial, onSave, onCancel }) {
           <div>
             <SectionTitle icon={Stethoscope} sub="Wife">Examination</SectionTitle>
             <div className="grid sm:grid-cols-4 gap-4">
-              {EXAM_FIELDS.map(([k, label]) => (
-                <TextField key={k} label={label} value={data.exam[k]} onChange={(v) => set(`exam.${k}`, v)} />
-              ))}
+              <TextField label="Stature" value={data.exam.stature} onChange={(v) => set("exam.stature", v)} />
+              <TextField label="Height (cm)" value={data.exam.height} onChange={(v) => setExamMeasure("height", v)} />
+              <TextField label="Weight (kg)" value={data.exam.weight} onChange={(v) => setExamMeasure("weight", v)} />
+              <BMIField value={data.exam.bmi} />
+              <SelectField label="Thyroid" value={data.exam.thyroid} onChange={(v) => set("exam.thyroid", v)} options={PRESENT_ABSENT_OPTIONS} placeholder="Select…" />
+              <SelectField label="Hirsutism" value={data.exam.hirsutism} onChange={(v) => set("exam.hirsutism", v)} options={PRESENT_ABSENT_OPTIONS} placeholder="Select…" />
+              <SelectField label="Br. Secretions" value={data.exam.brSecretions} onChange={(v) => set("exam.brSecretions", v)} options={PRESENT_ABSENT_OPTIONS} placeholder="Select…" />
+              <SelectField label="Sec. Sex Characters" value={data.exam.secSexChar} onChange={(v) => set("exam.secSexChar", v)} options={NORMAL_ABNORMAL_OPTIONS} placeholder="Select…" />
+              <TextFieldWithSuffix label="B.P." value={data.exam.bp} onChange={(v) => set("exam.bp", v)} suffix="mm/Hg" placeholder="120/80" />
+              <TextField label="TVS" value={data.exam.tvs} onChange={(v) => set("exam.tvs", v)} />
+              <TextField label="TVS — Uterus" value={data.exam.tvsUterus} onChange={(v) => set("exam.tvsUterus", v)} />
+              <TextField label="TVS — Endometrium" value={data.exam.tvsEndometrium} onChange={(v) => set("exam.tvsEndometrium", v)} />
+              <TextField label="TVS — Cavity" value={data.exam.tvsCavity} onChange={(v) => set("exam.tvsCavity", v)} />
+              <TextField label="TVS — Right Ovary" value={data.exam.tvsRightOvary} onChange={(v) => set("exam.tvsRightOvary", v)} />
+              <TextField label="TVS — Left Ovary" value={data.exam.tvsLeftOvary} onChange={(v) => set("exam.tvsLeftOvary", v)} />
+              <TextField label="R.S." value={data.exam.rs} onChange={(v) => set("exam.rs", v)} />
+              <TextField label="C.V.S." value={data.exam.cvs} onChange={(v) => set("exam.cvs", v)} />
             </div>
           </div>
           <div>
             <SectionTitle icon={TestTube2} sub="Wife">Investigations</SectionTitle>
             <div className="grid sm:grid-cols-4 gap-4">
-              {INVEST_FIELDS.map(([k, label]) => (
-                <TextField key={k} label={label} value={data.invest[k]} onChange={(v) => set(`invest.${k}`, v)} />
-              ))}
+              <TextField label="Hb" value={data.invest.hb} onChange={(v) => set("invest.hb", v)} />
+              <TextField label="Urine" value={data.invest.urine} onChange={(v) => set("invest.urine", v)} />
+              <TextField label="ESR" value={data.invest.esr} onChange={(v) => set("invest.esr", v)} />
+              <TextField label="Bl. Group" value={data.invest.blGroup} onChange={(v) => set("invest.blGroup", v)} />
+              <SelectField label="BSL Type" value={data.invest.bslType} onChange={(v) => set("invest.bslType", v)} options={BSL_TYPE_OPTIONS} placeholder="Select…" />
+              <TextField label="BSL (mg/dL)" value={data.invest.bsl} onChange={(v) => set("invest.bsl", v)} />
+              <TextField label="VDRL" value={data.invest.vdrl} onChange={(v) => set("invest.vdrl", v)} />
+              <TextField label="HIV" value={data.invest.hiv} onChange={(v) => set("invest.hiv", v)} />
+              <TextField label="HBs Ag" value={data.invest.hbsAg} onChange={(v) => set("invest.hbsAg", v)} />
+              <TextField label="Sr. Creatinine" value={data.invest.srCreatinine} onChange={(v) => set("invest.srCreatinine", v)} />
+              <TextField label="Sr. Insulin" value={data.invest.srInsulin} onChange={(v) => setWifeHoma("srInsulin", v)} />
+              <TextField label="Fasting Glucose (for HOMA-IR)" value={data.invest.homaGlucose} onChange={(v) => setWifeHoma("homaGlucose", v)} />
+              <HomaIRField value={data.invest.homaIR} />
+              <TextField label="Rubella" value={data.invest.rubella} onChange={(v) => set("invest.rubella", v)} />
+              <TextField label="Pap Smear" value={data.invest.papSmear} onChange={(v) => set("invest.papSmear", v)} />
+              <TextField label="APLA" value={data.invest.apla} onChange={(v) => set("invest.apla", v)} />
+              <TextField label="Misc." value={data.invest.misc} onChange={(v) => set("invest.misc", v)} />
             </div>
           </div>
         </Card>
@@ -1036,6 +1294,25 @@ function PatientForm({ initial, onSave, onCancel }) {
             <TextAreaField label="Habits & Past History" value={data.husband.habitsHistory} onChange={(v) => set("husband.habitsHistory", v)} />
             <TextAreaField label="Genital Examination" value={data.husband.genitalExam} onChange={(v) => set("husband.genitalExam", v)} />
             <TextAreaField label="Miscellaneous Investigations" value={data.husband.miscInvestigations} onChange={(v) => set("husband.miscInvestigations", v)} full />
+          </div>
+          <div>
+            <SectionTitle icon={TestTube2} sub="Husband — same panel as Wife, minus Rubella / Pap Smear / APLA">Investigations</SectionTitle>
+            <div className="grid sm:grid-cols-4 gap-4">
+              <TextField label="Hb" value={data.husband.invest.hb} onChange={(v) => set("husband.invest.hb", v)} />
+              <TextField label="Urine" value={data.husband.invest.urine} onChange={(v) => set("husband.invest.urine", v)} />
+              <TextField label="ESR" value={data.husband.invest.esr} onChange={(v) => set("husband.invest.esr", v)} />
+              <TextField label="Bl. Group" value={data.husband.invest.blGroup} onChange={(v) => set("husband.invest.blGroup", v)} />
+              <SelectField label="BSL Type" value={data.husband.invest.bslType} onChange={(v) => set("husband.invest.bslType", v)} options={BSL_TYPE_OPTIONS} placeholder="Select…" />
+              <TextField label="BSL (mg/dL)" value={data.husband.invest.bsl} onChange={(v) => set("husband.invest.bsl", v)} />
+              <TextField label="VDRL" value={data.husband.invest.vdrl} onChange={(v) => set("husband.invest.vdrl", v)} />
+              <TextField label="HIV" value={data.husband.invest.hiv} onChange={(v) => set("husband.invest.hiv", v)} />
+              <TextField label="HBs Ag" value={data.husband.invest.hbsAg} onChange={(v) => set("husband.invest.hbsAg", v)} />
+              <TextField label="Sr. Creatinine" value={data.husband.invest.srCreatinine} onChange={(v) => set("husband.invest.srCreatinine", v)} />
+              <TextField label="Sr. Insulin" value={data.husband.invest.srInsulin} onChange={(v) => setHusbandHoma("srInsulin", v)} />
+              <TextField label="Fasting Glucose (for HOMA-IR)" value={data.husband.invest.homaGlucose} onChange={(v) => setHusbandHoma("homaGlucose", v)} />
+              <HomaIRField value={data.husband.invest.homaIR} />
+              <TextField label="Misc." value={data.husband.invest.misc} onChange={(v) => set("husband.invest.misc", v)} />
+            </div>
           </div>
           <div>
             <div className="flex items-center justify-between mb-3">
@@ -1131,6 +1408,9 @@ function PatientDetail({ patient, prescriptions, cycles, billingItems, payments,
     <div className="flex flex-col gap-5">
       <div className="flex items-center gap-3 no-print">
         <button onClick={onBack}><ArrowLeft size={18} style={{ color: C.inkMuted }} /></button>
+        {patient.photoW && (
+          <img src={patient.photoW} alt="" className="rounded-full object-cover shrink-0" style={{ width: 40, height: 40, border: `1px solid ${C.border}` }} />
+        )}
         <div className="flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-2xl" style={FONT_DISPLAY}>{patient.patientName || "Unnamed"}</h1>
@@ -1157,7 +1437,8 @@ function PatientDetail({ patient, prescriptions, cycles, billingItems, payments,
             <SectionTitle icon={ClipboardList}>Registration & History</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm">
               {[["Ref. Doctor", patient.refDoctor], ["Reg. Date", fmtDate(patient.regDate)], ["Address", patient.address], ["Phone (W)", patient.phoneW], ["Phone (H)", patient.phoneH],
-              ["Married Since", patient.marriedSince], ["Menstrual History", patient.menstrualHistory], ["LMP", fmtDate(patient.lmp)],
+              ["Occupation (W)", patient.occW], ["Occupation (H)", patient.occH], ["Aadhaar (W)", patient.aadhaarW], ["Aadhaar (H)", patient.aadhaarH],
+              ["Married Since", patient.marriedSince], ["Type of Infertility", patient.typeInfertility], ["Menstrual History", patient.menstrualHistory], ["LMP", fmtDate(patient.lmp)],
               ["Obstetric History", patient.obstetricHistory], ["Past/Family History", patient.pastFamilyHistory]].map(([l, v]) => (
                 <Fragment key={l}>
                   <dt style={{ color: C.inkFaint }}>{l}</dt><dd style={{ color: C.ink }}>{v || "—"}</dd>
@@ -1211,6 +1492,16 @@ function PatientDetail({ patient, prescriptions, cycles, billingItems, payments,
               <HormoneTable title="Hormone Assays" panel={patient.hormonePanels.initial} />
               <HormoneTable title="Recepit (Repeat)" panel={patient.hormonePanels.repeat} />
             </div>
+          </Card>
+          <Card className="p-5">
+            <SectionTitle icon={TestTube2} sub="Husband">Investigations (Husband)</SectionTitle>
+            <dl className="grid grid-cols-2 gap-y-2 text-sm">
+              {INVEST_FIELDS_HUSBAND.map(([k, label]) => (
+                <Fragment key={k}>
+                  <dt style={{ color: C.inkFaint }}>{label}</dt><dd style={{ color: C.ink }}>{patient.husband.invest[k] || "—"}</dd>
+                </Fragment>
+              ))}
+            </dl>
           </Card>
           <Card className="p-5">
             <div className="flex items-center justify-between mb-3">
@@ -1586,11 +1877,11 @@ export default function App() {
           if (session?.authenticated && session.user) {
             setCurrentUser(session.user);
             const p = await loadPatientsRemote();
-            setPatients(p);
+            setPatients(p.map(normalizePatient));
           }
         } else {
           const p = await storageGet("patients", []);
-          setPatients(p);
+          setPatients(p.map(normalizePatient));
         }
 
         const rx = await storageGet("prescriptions", []);
@@ -1638,7 +1929,7 @@ export default function App() {
       // The login request sets the HttpOnly cookie. Load the permanent
       // patient records only after that cookie exists.
       const remotePatients = await loadPatientsRemote();
-      setPatients(remotePatients);
+      setPatients(remotePatients.map(normalizePatient));
       setView("dashboard");
       setSelectedId(null);
       setEditingPatient(null);
