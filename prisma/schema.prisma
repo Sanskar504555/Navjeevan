@@ -54,10 +54,29 @@ model Patient {
   // for indexing/search. See api/patients for read/write shape.
   data      Json         @default("{}")
   reports   TestReport[]
+  prescriptions Prescription[]
   createdAt DateTime     @default(now()) @map("created_at")
   updatedAt DateTime     @updatedAt @map("updated_at")
 
   @@map("patients")
+}
+
+model Prescription {
+  id        String   @id @default(uuid())
+  // Client-generated id from PrescriptionModal (rx.id) — kept as the lookup
+  // key for the same reason Patient.patientId is: the frontend never has to
+  // remap ids after a save.
+  rxId      String   @unique @map("rx_id")
+  // References Patient.patientId (the client-generated id), not Patient.id.
+  patientId String   @map("patient_id")
+  patient   Patient  @relation(fields: [patientId], references: [patientId], onDelete: Cascade)
+  // Full prescription object (date, doctor, advice, medicines[]) as produced
+  // by PrescriptionModal in renderer/src/App.jsx, stored as-is.
+  data      Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("prescriptions")
 }
 
 model TestReport {

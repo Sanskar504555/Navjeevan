@@ -157,10 +157,10 @@ async function storageDelete(key) {
 }
 
 /* Web/Vercel build: window.api (Electron preload) doesn't exist, so patient
-   records — and only patient records, per the current persistence work —
-   go through the Vercel API routes to Postgres instead of local storage.
-   Prescriptions/cycles/billing/payments still use storageGet/storageSet
-   above unchanged, which quietly no-op on the web build for now. */
+   records and prescriptions go through the Vercel API routes to Postgres
+   instead of local storage. Cycles/billing/payments still use
+   storageGet/storageSet above unchanged, which quietly no-op on the web
+   build for now. */
 const IS_WEB = typeof window === "undefined" || !window.api;
 
 async function apiFetch(path, options = {}) {
@@ -191,6 +191,15 @@ async function updatePatientRemote(id, patient) {
 }
 async function deletePatientRemote(id) {
   await apiFetch(`/api/patients/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+async function loadPrescriptionsRemote() {
+  const body = await apiFetch("/api/prescriptions");
+  return Array.isArray(body?.prescriptions) ? body.prescriptions : [];
+}
+async function createPrescriptionRemote(rx) {
+  const body = await apiFetch("/api/prescriptions", { method: "POST", body: JSON.stringify(rx) });
+  return body?.prescription || rx;
 }
 
 /* ---------------------------------------------------------------------
@@ -1972,17 +1981,19 @@ export default function App() {
             setCurrentUser(session.user);
             const p = await loadPatientsRemote();
             setPatients(p.map(normalizePatient));
+            const rx = await loadPrescriptionsRemote();
+            setPrescriptions(rx);
           }
         } else {
           const p = await storageGet("patients", []);
           setPatients(p.map(normalizePatient));
+          const rx = await storageGet("prescriptions", []);
+          setPrescriptions(rx);
         }
 
-        const rx = await storageGet("prescriptions", []);
         const cy = await storageGet("cycles", []);
         const bi = await storageGet("billingItems", []);
         const pay = await storageGet("payments", []);
-        setPrescriptions(rx);
         setCycles(cy);
         setBillingItems(bi);
         setPayments(pay);
@@ -1999,7 +2010,7 @@ export default function App() {
   }, []);
 
   const persistPatients = async (next) => { setPatients(next); if (!IS_WEB) await storageSet("patients", next); };
-  const persistRx = async (next) => { setPrescriptions(next); await storageSet("prescriptions", next); };
+  const persistRx = async (next) => { setPrescriptions(next); if (!IS_WEB) await storageSet("prescriptions", next); };
   const persistCycles = async (next) => { setCycles(next); await storageSet("cycles", next); };
   const persistBilling = async (next) => { setBillingItems(next); await storageSet("billingItems", next); };
   const persistPayments = async (next) => { setPayments(next); await storageSet("payments", next); };
@@ -2021,9 +2032,11 @@ export default function App() {
 
       setCurrentUser(body.user);
       // The login request sets the HttpOnly cookie. Load the permanent
-      // patient records only after that cookie exists.
+      // patient/prescription records only after that cookie exists.
       const remotePatients = await loadPatientsRemote();
       setPatients(remotePatients.map(normalizePatient));
+      const remoteRx = await loadPrescriptionsRemote();
+      setPrescriptions(remoteRx);
       setView("dashboard");
       setSelectedId(null);
       setEditingPatient(null);
@@ -2141,7 +2154,16 @@ export default function App() {
   };
 
   const addPrescription = async (patientId, rx) => {
-    await persistRx([...prescriptions, { ...rx, patientId }]);
+    let record = { ...rx, patientId };
+    if (IS_WEB) {
+      try {
+        record = await createPrescriptionRemote(record);
+      } catch (error) {
+        showToast(error.message || "Could not save prescription.", "error");
+        return;
+      }
+    }
+    await persistRx([...prescriptions, record]);
     showToast("Prescription saved.");
   };
   const addCycle = async (patientId, c) => {
