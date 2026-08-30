@@ -276,7 +276,7 @@ function blankPatient() {
     },
     diagnosis: "",
     planOfManagement: "",
-    treatmentType: "Optimization",
+    treatmentType: "Undecided",
     status: "Active",
     nextFollowUp: "",
     cycles: [blankPaperCycle()],
@@ -1126,7 +1126,7 @@ function PatientsList({ patients, openPatient, setView, deletePatient }) {
               className="text-sm outline-none flex-1" style={{ color: C.ink }} />
           </div>
           <select value={tFilter} onChange={(e) => setTFilter(e.target.value)} className="rounded-lg px-3 py-2 text-sm" style={{ border: `1px solid ${C.border}`, color: C.ink }}>
-            {["All", "IUI", "IVF", "Undecided", "Other"].map((o) => <option key={o}>{o}</option>)}
+            {["All", "IUI", "IVF", "Optimization", "Other"].map((o) => <option key={o}>{o}</option>)}
           </select>
         </div>
         <div className="overflow-x-auto emr-scroll">
@@ -1451,7 +1451,7 @@ function PatientForm({ initial, onSave, onCancel }) {
             <div className="grid sm:grid-cols-2 gap-4">
               <TextAreaField label="Diagnosis" value={data.diagnosis} onChange={(v) => set("diagnosis", v)} full rows={3} />
               <TextAreaField label="Plan of Management" value={data.planOfManagement} onChange={(v) => set("planOfManagement", v)} full rows={3} />
-              <SelectField label="Treatment Suggested" value={data.treatmentType} onChange={(v) => set("treatmentType", v)} options={["Undecided", "IUI", "IVF", "Other"]} />
+              <SelectField label="Treatment Suggested" value={data.treatmentType} onChange={(v) => set("treatmentType", v)} options={["Optimization", "IUI", "IVF", "Other"]} />
               <SelectField label="Status" value={data.status} onChange={(v) => set("status", v)} options={["Active", "Follow-up", "Completed", "Discontinued"]} />
               <TextField label="Next Follow-up Date" type="date" value={data.nextFollowUp} onChange={(v) => set("nextFollowUp", v)} />
             </div>
