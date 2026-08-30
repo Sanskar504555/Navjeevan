@@ -5,7 +5,7 @@ import {
   ChevronLeft, Pill, TestTube2, Baby, ClipboardList, Trash2, Pencil,
   ArrowLeft, AlertCircle, Clock, CheckCircle2, Menu, ShieldCheck,
   FlaskConical, Stethoscope, CalendarClock, Database,
-  IdCard, Upload, ImagePlus, FileText
+  IdCard, Upload, ImagePlus, FileText, Printer
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell
@@ -47,8 +47,10 @@ const FONTS = (
     .emr-scroll::-webkit-scrollbar-thumb { background: #C9D3CE; border-radius: 8px; }
     .emr-fade { animation: emrFade .18s ease; }
     @keyframes emrFade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+    .print-only { display: none; }
     @media print {
       .no-print { display: none !important; }
+      .print-only { display: block !important; }
       .emr-root { background: #fff !important; }
       body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     }
@@ -650,6 +652,34 @@ function Toast({ toast }) {
         {toast.type === "error" ? <AlertCircle size={16} /> : <CheckCircle2 size={16} />}
         {toast.msg}
       </div>
+    </div>
+  );
+}
+
+/* Clinic letterhead — hidden on screen (see .print-only), shown only at the
+   top of a printed page via window.print(), above whichever tab triggered
+   the print. */
+function Letterhead({ patient }) {
+  return (
+    <div className="print-only" style={{ marginBottom: 20, paddingBottom: 14, borderBottom: `2px solid ${C.primaryDark}` }}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Baby size={26} style={{ color: C.primary }} />
+          <div>
+            <p className="text-lg font-semibold" style={{ ...FONT_DISPLAY, color: C.primaryDark }}>Navjeevan Fertility &amp; IVF Center</p>
+            <p className="text-xs" style={{ color: C.inkMuted }}>Krishna-Mai Hospital, Solapur</p>
+          </div>
+        </div>
+        <p className="text-xs" style={{ color: C.inkMuted }}>Printed: {fmtDate(todayISO())}</p>
+      </div>
+      {patient && (
+        <div className="flex flex-wrap gap-x-6 gap-y-1 mt-3 text-sm" style={{ color: C.ink }}>
+          <span><strong>Patient:</strong> {patient.patientName || "Unnamed"}</span>
+          <span><strong>File No.:</strong> {patient.fileNo || "—"}</span>
+          <span><strong>Age:</strong> {patient.ageW || "—"}</span>
+          <span><strong>Ref. Doctor:</strong> {patient.refDoctor || "—"}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -1534,7 +1564,12 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
       </div>
 
       {tab === "overview" && (
-        <div className="grid lg:grid-cols-2 gap-5">
+        <div className="flex flex-col gap-5">
+          <div className="flex justify-end no-print">
+            <Btn size="sm" variant="ghost" icon={Printer} onClick={() => window.print()}>Print</Btn>
+          </div>
+          <Letterhead patient={patient} />
+          <div className="grid lg:grid-cols-2 gap-5">
           <Card className="p-5">
             <SectionTitle icon={ClipboardList}>Registration & History</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm">
@@ -1580,6 +1615,7 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
               ))}
             </div>
           </Card>
+          </div>
         </div>
       )}
 
@@ -1644,9 +1680,13 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
 
       {tab === "prescriptions" && (
         <Card className="p-5">
-          <div className="flex items-center justify-between mb-3">
+          <Letterhead patient={patient} />
+          <div className="flex items-center justify-between mb-3 no-print">
             <SectionTitle icon={Pill}>Prescriptions</SectionTitle>
-            <Btn size="sm" icon={Plus} onClick={() => setRxOpen(true)}>New Prescription</Btn>
+            <div className="flex gap-2">
+              <Btn size="sm" variant="ghost" icon={Printer} onClick={() => window.print()}>Print</Btn>
+              <Btn size="sm" icon={Plus} onClick={() => setRxOpen(true)}>New Prescription</Btn>
+            </div>
           </div>
           <div className="flex flex-col gap-3">
             {_.orderBy(pRx, ["date"], ["desc"]).map((rx) => (
