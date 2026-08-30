@@ -5,7 +5,7 @@ import {
   ChevronLeft, Pill, TestTube2, Baby, ClipboardList, Trash2, Pencil,
   ArrowLeft, AlertCircle, Clock, CheckCircle2, Menu, ShieldCheck,
   FlaskConical, Stethoscope, CalendarClock, Database,
-  IdCard, Upload, ImagePlus, FileText, Printer
+  IdCard, Upload, ImagePlus, FileText, Printer, Eye
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell
@@ -214,6 +214,13 @@ async function loadPrescriptionsRemote() {
 async function createPrescriptionRemote(rx) {
   const body = await apiFetch("/api/prescriptions", { method: "POST", body: JSON.stringify(rx) });
   return body?.prescription || rx;
+}
+async function updatePrescriptionRemote(id, rx) {
+  const body = await apiFetch(`/api/prescriptions/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(rx) });
+  return body?.prescription || rx;
+}
+async function deletePrescriptionRemote(id) {
+  await apiFetch(`/api/prescriptions/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 /* ---------------------------------------------------------------------
@@ -1516,13 +1523,30 @@ function PatientForm({ initial, onSave, onCancel }) {
 /* ---------------------------------------------------------------------
    Patient Detail
 --------------------------------------------------------------------- */
-function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPrescription, onAddCycle, onAddMonitoring, onAddSemen, onAddFile, onRemoveFile }) {
+function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPrescription, onUpdatePrescription, onDeletePrescription, onAddCycle, onAddMonitoring, onAddSemen, onAddFile, onRemoveFile }) {
   const [tab, setTab] = useState("overview");
   const [rxOpen, setRxOpen] = useState(false);
+  const [editRxId, setEditRxId] = useState(null);
+  const [viewRxId, setViewRxId] = useState(null);
+  const [printRxId, setPrintRxId] = useState(null);
   const [cycleOpen, setCycleOpen] = useState(false);
   const [monOpen, setMonOpen] = useState(null);
   const [fileBusy, setFileBusy] = useState(false);
   const [fileError, setFileError] = useState("");
+
+  // Printing a single prescription (see the hidden .print-only block below)
+  // needs its content committed to the DOM before window.print() reads the
+  // page, and needs to clear itself once the print dialog closes so the
+  // next print (of a different prescription) doesn't inherit stale state.
+  useEffect(() => {
+    const reset = () => setPrintRxId(null);
+    window.addEventListener("afterprint", reset);
+    return () => window.removeEventListener("afterprint", reset);
+  }, []);
+  const printRx = (id) => { setPrintRxId(id); requestAnimationFrame(() => window.print()); };
+  const confirmDeleteRx = (id) => {
+    if (window.confirm("Delete this prescription? This cannot be undone.")) onDeletePrescription(id);
+  };
 
   const pRx = prescriptions.filter((r) => r.patientId === patient.id);
   const pCycles = cycles.filter((c) => c.patientId === patient.id);
@@ -1680,20 +1704,23 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
 
       {tab === "prescriptions" && (
         <Card className="p-5">
-          <Letterhead patient={patient} />
           <div className="flex items-center justify-between mb-3 no-print">
             <SectionTitle icon={Pill}>Prescriptions</SectionTitle>
-            <div className="flex gap-2">
-              <Btn size="sm" variant="ghost" icon={Printer} onClick={() => window.print()}>Print</Btn>
-              <Btn size="sm" icon={Plus} onClick={() => setRxOpen(true)}>New Prescription</Btn>
-            </div>
+            <Btn size="sm" icon={Plus} onClick={() => setRxOpen(true)}>New Prescription</Btn>
           </div>
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3 no-print">
             {_.orderBy(pRx, ["date"], ["desc"]).map((rx) => (
               <div key={rx.id} className="rounded-xl p-4" style={{ background: C.slateTint }}>
                 <div className="flex justify-between items-center mb-2">
-                  <p className="text-sm font-semibold" style={{ color: C.ink }}>{fmtDate(rx.date)}</p>
-                  <p className="text-xs" style={{ color: C.inkFaint }}>{rx.doctor}</p>
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color: C.ink }}>{fmtDate(rx.date)}</p>
+                    <p className="text-xs" style={{ color: C.inkFaint }}>{rx.doctor}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button type="button" title="View" onClick={() => setViewRxId(rx.id)}><Eye size={15} style={{ color: C.inkFaint }} /></button>
+                    <button type="button" title="Edit" onClick={() => setEditRxId(rx.id)}><Pencil size={15} style={{ color: C.inkFaint }} /></button>
+                    <button type="button" title="Delete" onClick={() => confirmDeleteRx(rx.id)}><Trash2 size={15} style={{ color: C.inkFaint }} /></button>
+                  </div>
                 </div>
                 <ul className="text-sm flex flex-col gap-1">
                   {rx.medicines.map((m) => (
@@ -1705,7 +1732,39 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
             ))}
             {pRx.length === 0 && <p className="text-sm" style={{ color: C.inkFaint }}>No prescriptions recorded yet.</p>}
           </div>
+
           {rxOpen && <PrescriptionModal drugOptions={drugOptions} onClose={() => setRxOpen(false)} onSave={(rx) => { onAddPrescription(patient.id, rx); setRxOpen(false); }} />}
+          {editRxId && (
+            <PrescriptionModal
+              drugOptions={drugOptions}
+              initial={pRx.find((r) => r.id === editRxId)}
+              onClose={() => setEditRxId(null)}
+              onSave={(rx) => { onUpdatePrescription({ ...rx, patientId: patient.id }); setEditRxId(null); }}
+            />
+          )}
+          {viewRxId && (() => {
+            const rx = pRx.find((r) => r.id === viewRxId);
+            if (!rx) return null;
+            return (
+              <ModalShell title={`Prescription — ${fmtDate(rx.date)}`} onClose={() => setViewRxId(null)} wide>
+                <PrescriptionView rx={rx} />
+                <div className="flex justify-end gap-2 mt-5">
+                  <Btn variant="ghost" icon={Printer} onClick={() => printRx(rx.id)}>Print</Btn>
+                  <Btn variant="ghost" onClick={() => setViewRxId(null)}>Close</Btn>
+                </div>
+              </ModalShell>
+            );
+          })()}
+          {printRxId && (() => {
+            const rx = pRx.find((r) => r.id === printRxId);
+            if (!rx) return null;
+            return (
+              <div className="print-only">
+                <Letterhead patient={patient} />
+                <PrescriptionView rx={rx} />
+              </div>
+            );
+          })()}
         </Card>
       )}
 
@@ -1809,7 +1868,7 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
 --------------------------------------------------------------------- */
 function ModalShell({ title, onClose, children, wide }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(20,30,27,0.45)" }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 no-print" style={{ background: "rgba(20,30,27,0.45)" }}>
       <div className={"rounded-2xl p-6 w-full emr-fade max-h-[90vh] overflow-y-auto emr-scroll " + (wide ? "max-w-2xl" : "max-w-md")} style={{ background: "#fff" }}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold" style={{ color: C.ink }}>{title}</h3>
@@ -1821,17 +1880,19 @@ function ModalShell({ title, onClose, children, wide }) {
   );
 }
 
-function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS }) {
-  const [date, setDate] = useState(todayISO());
-  const [doctor, setDoctor] = useState("");
-  const [advice, setAdvice] = useState("");
-  const [meds, setMeds] = useState([{ id: uid(), name: "", dosage: "", frequency: "", duration: "", instructions: "" }]);
+function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initial }) {
+  const [date, setDate] = useState(initial?.date || todayISO());
+  const [doctor, setDoctor] = useState(initial?.doctor || "");
+  const [advice, setAdvice] = useState(initial?.advice || "");
+  const [meds, setMeds] = useState(
+    initial?.medicines?.length ? initial.medicines.map((m) => ({ ...m })) : [{ id: uid(), name: "", dosage: "", frequency: "", duration: "", instructions: "" }]
+  );
   const addMed = () => setMeds([...meds, { id: uid(), name: "", dosage: "", frequency: "", duration: "", instructions: "" }]);
   const updMed = (id, k, v) => setMeds(meds.map((m) => m.id === id ? { ...m, [k]: v } : m));
   const rmMed = (id) => setMeds(meds.filter((m) => m.id !== id));
 
   return (
-    <ModalShell title="New Prescription" onClose={onClose} wide>
+    <ModalShell title={initial ? "Edit Prescription" : "New Prescription"} onClose={onClose} wide>
       <div className="grid sm:grid-cols-2 gap-4 mb-4">
         <TextField label="Date" type="date" value={date} onChange={setDate} />
         <TextField label="Prescribing Doctor" value={doctor} onChange={setDoctor} />
@@ -1855,9 +1916,42 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS }) {
       <div className="mt-4"><TextAreaField label="General Advice" value={advice} onChange={setAdvice} full /></div>
       <div className="flex justify-end gap-2 mt-5">
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn icon={Save} onClick={() => onSave({ id: uid(), date, doctor, advice, medicines: meds.filter((m) => m.name) })}>Save Prescription</Btn>
+        <Btn icon={Save} onClick={() => onSave({ id: initial?.id || uid(), date, doctor, advice, medicines: meds.filter((m) => m.name) })}>{initial ? "Save Changes" : "Save Prescription"}</Btn>
       </div>
     </ModalShell>
+  );
+}
+
+/* Read-only prescription detail — shared between the View modal (on screen)
+   and the hidden print-only block (see printRxId in PatientDetail), so the
+   two never drift apart. */
+function PrescriptionView({ rx }) {
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-3">
+        <p className="text-sm font-semibold" style={{ color: C.ink }}>{fmtDate(rx.date)}</p>
+        <p className="text-xs" style={{ color: C.inkFaint }}>{rx.doctor || "—"}</p>
+      </div>
+      <div className="overflow-x-auto emr-scroll">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left" style={{ color: C.inkFaint }}>
+              <th className="pb-1 font-medium">Drug</th><th className="pb-1 font-medium">Dose</th>
+              <th className="pb-1 font-medium">Frequency</th><th className="pb-1 font-medium">Duration</th><th className="pb-1 font-medium">Instructions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rx.medicines.map((m) => (
+              <tr key={m.id} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                <td className="py-1.5" style={{ color: C.ink }}>{m.name}</td><td className="py-1.5">{m.dosage || "—"}</td>
+                <td className="py-1.5">{m.frequency || "—"}</td><td className="py-1.5">{m.duration || "—"}</td><td className="py-1.5">{m.instructions || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {rx.advice && <p className="text-sm mt-3" style={{ color: C.inkMuted }}><strong>Advice:</strong> {rx.advice}</p>}
+    </div>
   );
 }
 
@@ -2129,6 +2223,31 @@ export default function App() {
     await persistRx([...prescriptions, record]);
     showToast("Prescription saved.");
   };
+  const updatePrescription = async (rx) => {
+    let record = rx;
+    if (IS_WEB) {
+      try {
+        record = await updatePrescriptionRemote(rx.id, rx);
+      } catch (error) {
+        showToast(error.message || "Could not update prescription.", "error");
+        return;
+      }
+    }
+    await persistRx(prescriptions.map((r) => r.id === rx.id ? record : r));
+    showToast("Prescription updated.");
+  };
+  const deletePrescription = async (id) => {
+    if (IS_WEB) {
+      try {
+        await deletePrescriptionRemote(id);
+      } catch (error) {
+        showToast(error.message || "Could not delete prescription.", "error");
+        return;
+      }
+    }
+    await persistRx(prescriptions.filter((r) => r.id !== id));
+    showToast("Prescription deleted.");
+  };
   const addCycle = async (patientId, c) => {
     await persistCycles([...cycles, { ...c, patientId }]);
     showToast("Treatment cycle created.");
@@ -2206,6 +2325,8 @@ export default function App() {
             onBack={() => setView("patients")}
             onEdit={() => setView("editPatient")}
             onAddPrescription={addPrescription}
+            onUpdatePrescription={updatePrescription}
+            onDeletePrescription={deletePrescription}
             onAddCycle={addCycle}
             onAddMonitoring={addMonitoring}
             onAddSemen={(pid) => setSemenModalFor(pid)}
