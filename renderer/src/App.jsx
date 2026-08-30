@@ -4,8 +4,8 @@ import {
   LayoutDashboard, Users, UserPlus, LogOut, Search, Plus, X, Save,
   ChevronLeft, Pill, TestTube2, Baby, ClipboardList, Trash2, Pencil,
   ArrowLeft, AlertCircle, Clock, CheckCircle2, Menu, ShieldCheck,
-  FlaskConical, Stethoscope, CalendarClock, Receipt, IndianRupee, Database,
-  IdCard, Upload, ImagePlus
+  FlaskConical, Stethoscope, CalendarClock, Database,
+  IdCard, Upload, ImagePlus, FileText
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell
@@ -133,6 +133,19 @@ function readImageAsDataURL(file, maxDim = 480) {
   });
 }
 
+/* Generic file attachment upload (Word/Excel/PDF/images) — unlike
+   readImageAsDataURL above, this doesn't downscale (only images can be
+   redrawn to a canvas), so it's capped by MAX_FILE_SIZE at the call site
+   instead. */
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read file"));
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(file);
+  });
+}
+
 /* Desktop build: persistence goes through window.api (Electron preload →
    IPC → local SQLite), not the browser artifact's window.storage. The
    main process already returns/accepts real JS values (it does its own
@@ -158,9 +171,8 @@ async function storageDelete(key) {
 
 /* Web/Vercel build: window.api (Electron preload) doesn't exist, so patient
    records and prescriptions go through the Vercel API routes to Postgres
-   instead of local storage. Cycles/billing/payments still use
-   storageGet/storageSet above unchanged, which quietly no-op on the web
-   build for now. */
+   instead of local storage. Cycles still use storageGet/storageSet above
+   unchanged, which quietly no-op on the web build for now. */
 const IS_WEB = typeof window === "undefined" || !window.api;
 
 async function apiFetch(path, options = {}) {
@@ -264,10 +276,11 @@ function blankPatient() {
     },
     diagnosis: "",
     planOfManagement: "",
-    treatmentType: "Undecided",
+    treatmentType: "Optimization",
     status: "Active",
     nextFollowUp: "",
     cycles: [blankPaperCycle()],
+    files: [],
     createdAt: new Date().toISOString(),
   };
 }
@@ -409,8 +422,13 @@ const FREQUENCY_OPTIONS = [
   "OD (once daily)", "BD (twice daily)", "TID (thrice daily)", "QID (four times daily)",
   "1-0-1", "1-1-1", "0-0-1", "1-0-0", "SOS (as needed)", "Stat (once now)", "Weekly", "Alternate days",
 ];
-const BILLING_CATEGORIES = ["Consultation", "Investigation", "Procedure", "Medicine", "IUI Treatment", "IVF Treatment", "Other"];
-const PAYMENT_MODES = ["Cash", "Card", "UPI", "Bank Transfer", "Cheque", "Other"];
+/* Patient file attachments — client-side upload, capped at MAX_FILES so a
+   record can't grow unbounded (files are embedded as data URLs in the same
+   JSON blob the patient record is saved as, so each one adds directly to
+   that payload). */
+const MAX_FILES = 10;
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB per file
+const FILE_ACCEPT = ".doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/jpeg,image/png,application/pdf";
 
 /* ---------------------------------------------------------------------
    Small UI primitives
@@ -796,7 +814,7 @@ function LoginView({ onLogin }) {
           </div>
           <div>
             <h1 className="text-4xl leading-tight mb-3" style={FONT_DISPLAY}>Every follow-up,<br />on record.</h1>
-            <p className="text-sm opacity-80 max-w-xs">A patient journey system for the OPD — from first consultation through IUI/IVF cycles, reports, prescriptions and billing.</p>
+            <p className="text-sm opacity-80 max-w-xs">A patient journey system for the OPD — from first consultation through IUI/IVF cycles, reports, prescriptions and files.</p>
           </div>
           <p className="text-xs opacity-60">Krishna-Mai Hospital, Solapur</p>
         </div>
@@ -956,7 +974,7 @@ function BackupsModal({ onClose, backups, onRun, onRestore, onOpenFolder, busy }
 /* ---------------------------------------------------------------------
    Dashboard
 --------------------------------------------------------------------- */
-function Dashboard({ patients, billingItems, payments, setView, openPatient }) {
+function Dashboard({ patients, setView, openPatient }) {
   const now = new Date();
   const monthly = useMemo(() => {
     const buckets = [];
@@ -987,12 +1005,6 @@ function Dashboard({ patients, billingItems, payments, setView, openPatient }) {
     .map((p) => ({ ...p, delta: daysFromToday(p.nextFollowUp) }))
     .filter((p) => p.delta <= 14)
     .sort((a, b) => a.delta - b.delta);
-
-  const isThisMonth = (d) => { const dt = new Date((d || "").slice(0, 10) + "T00:00:00"); return !isNaN(dt) && dt.getMonth() === now.getMonth() && dt.getFullYear() === now.getFullYear(); };
-  const totalBilled = billingItems.reduce((s, b) => s + (Number(b.amount) || 0), 0);
-  const totalPaid = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
-  const outstanding = totalBilled - totalPaid;
-  const collectedThisMonth = payments.filter((p) => isThisMonth(p.date)).reduce((s, p) => s + (Number(p.amount) || 0), 0);
 
   const kpis = [
     { label: "Total Patients", value: patients.length, icon: Users, tone: "slate" },
@@ -1057,21 +1069,6 @@ function Dashboard({ patients, billingItems, payments, setView, openPatient }) {
               </button>
             ))}
           </div>
-        </Card>
-      </div>
-
-      <div className="grid sm:grid-cols-3 gap-4">
-        <Card className="p-4 flex items-center gap-3">
-          <div className="p-2.5 rounded-xl" style={{ background: C.primaryTint }}><Receipt size={18} style={{ color: C.primary }} /></div>
-          <div><p className="text-xs" style={{ color: C.inkMuted }}>Total Billed (all-time)</p><p className="text-xl" style={FONT_DISPLAY}>₹{totalBilled.toLocaleString("en-IN")}</p></div>
-        </Card>
-        <Card className="p-4 flex items-center gap-3">
-          <div className="p-2.5 rounded-xl" style={{ background: C.greenTint }}><IndianRupee size={18} style={{ color: C.green }} /></div>
-          <div><p className="text-xs" style={{ color: C.inkMuted }}>Collected This Month</p><p className="text-xl" style={FONT_DISPLAY}>₹{collectedThisMonth.toLocaleString("en-IN")}</p></div>
-        </Card>
-        <Card className="p-4 flex items-center gap-3">
-          <div className="p-2.5 rounded-xl" style={{ background: C.brickTint }}><AlertCircle size={18} style={{ color: C.brick }} /></div>
-          <div><p className="text-xs" style={{ color: C.inkMuted }}>Outstanding Dues</p><p className="text-xl" style={FONT_DISPLAY}>₹{outstanding.toLocaleString("en-IN")}</p></div>
         </Card>
       </div>
 
@@ -1489,22 +1486,25 @@ function PatientForm({ initial, onSave, onCancel }) {
 /* ---------------------------------------------------------------------
    Patient Detail
 --------------------------------------------------------------------- */
-function PatientDetail({ patient, prescriptions, cycles, billingItems, payments, onBack, onEdit, onAddPrescription, onAddCycle, onAddMonitoring, onAddSemen, onAddBillingItem, onRemoveBillingItem, onAddPayment, onRemovePayment }) {
+function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPrescription, onAddCycle, onAddMonitoring, onAddSemen, onAddFile, onRemoveFile }) {
   const [tab, setTab] = useState("overview");
   const [rxOpen, setRxOpen] = useState(false);
   const [cycleOpen, setCycleOpen] = useState(false);
   const [monOpen, setMonOpen] = useState(null);
-  const [billOpen, setBillOpen] = useState(false);
-  const [payOpen, setPayOpen] = useState(false);
+  const [fileBusy, setFileBusy] = useState(false);
+  const [fileError, setFileError] = useState("");
 
   const pRx = prescriptions.filter((r) => r.patientId === patient.id);
   const pCycles = cycles.filter((c) => c.patientId === patient.id);
-  const pBilling = billingItems.filter((b) => b.patientId === patient.id);
-  const pPayments = payments.filter((p) => p.patientId === patient.id);
-  const totalBilled = pBilling.reduce((s, b) => s + (Number(b.amount) || 0), 0);
-  const totalPaid = pPayments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
-  const balance = totalBilled - totalPaid;
-  const billStatus = totalBilled === 0 ? "No Charges" : balance <= 0 ? "Paid" : totalPaid > 0 ? "Partial" : "Due";
+  const patientFiles = patient.files || [];
+
+  // Any drug name a doctor has ever typed into "Other" on this or any other
+  // patient's prescription is folded back into the dropdown here, so it
+  // only needs to be typed once — no separate "custom drugs" list to store.
+  const drugOptions = useMemo(
+    () => _.uniq([...DRUG_OPTIONS, ..._.flatMap(prescriptions, (rx) => (rx.medicines || []).map((m) => m.name))].filter(Boolean)),
+    [prescriptions]
+  );
 
   return (
     <div className="flex flex-col gap-5">
@@ -1525,7 +1525,7 @@ function PatientDetail({ patient, prescriptions, cycles, billingItems, payments,
       </div>
 
       <div className="flex gap-1 overflow-x-auto emr-scroll border-b no-print" style={{ borderColor: C.border }}>
-        {[["overview", "Overview"], ["reports", "Reports"], ["prescriptions", "Prescriptions"], ["cycles", "IUI / IVF Cycles"], ["billing", "Billing"]].map(([k, label]) => (
+        {[["overview", "Overview"], ["reports", "Reports"], ["prescriptions", "Prescriptions"], ["cycles", "IUI / IVF Cycles"], ["files", "Files"]].map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)} className="px-4 py-2.5 text-sm font-medium whitespace-nowrap"
             style={{ color: tab === k ? C.primary : C.inkFaint, borderBottom: tab === k ? `2px solid ${C.primary}` : "2px solid transparent" }}>
             {label}
@@ -1665,7 +1665,7 @@ function PatientDetail({ patient, prescriptions, cycles, billingItems, payments,
             ))}
             {pRx.length === 0 && <p className="text-sm" style={{ color: C.inkFaint }}>No prescriptions recorded yet.</p>}
           </div>
-          {rxOpen && <PrescriptionModal onClose={() => setRxOpen(false)} onSave={(rx) => { onAddPrescription(patient.id, rx); setRxOpen(false); }} />}
+          {rxOpen && <PrescriptionModal drugOptions={drugOptions} onClose={() => setRxOpen(false)} onSave={(rx) => { onAddPrescription(patient.id, rx); setRxOpen(false); }} />}
         </Card>
       )}
 
@@ -1711,79 +1711,54 @@ function PatientDetail({ patient, prescriptions, cycles, billingItems, payments,
         </div>
       )}
 
-      {tab === "billing" && (
-        <div className="flex flex-col gap-5">
-          <div className="grid sm:grid-cols-4 gap-4 no-print">
-            <Card className="p-4"><p className="text-xs mb-1" style={{ color: C.inkMuted }}>Total Billed</p><p className="text-2xl" style={FONT_DISPLAY}>₹{totalBilled.toLocaleString("en-IN")}</p></Card>
-            <Card className="p-4"><p className="text-xs mb-1" style={{ color: C.inkMuted }}>Total Paid</p><p className="text-2xl" style={FONT_DISPLAY}>₹{totalPaid.toLocaleString("en-IN")}</p></Card>
-            <Card className="p-4"><p className="text-xs mb-1" style={{ color: C.inkMuted }}>Balance Due</p><p className="text-2xl" style={FONT_DISPLAY}>₹{balance.toLocaleString("en-IN")}</p></Card>
-            <Card className="p-4 flex flex-col justify-between"><p className="text-xs mb-1" style={{ color: C.inkMuted }}>Status</p><Badge tone={billStatus === "Paid" ? "green" : billStatus === "Partial" ? "gold" : billStatus === "Due" ? "brick" : "slate"}>{billStatus}</Badge></Card>
+      {tab === "files" && (
+        <Card className="p-5">
+          <div className="flex items-center justify-between mb-3">
+            <SectionTitle icon={FileText} sub={`${patientFiles.length}/${MAX_FILES} uploaded — Word, Excel, JPG, PNG or PDF`}>Patient Files</SectionTitle>
           </div>
-
-          <Card className="p-5 print-invoice">
-            <div className="flex items-center justify-between mb-1">
-              <div>
-                <h2 className="text-lg font-semibold" style={{ color: C.ink }}>Invoice — {patient.patientName || "Unnamed"}</h2>
-                <p className="text-xs" style={{ color: C.inkFaint }}>Navjeevan Fertility & IVF Center, Krishna-Mai Hospital, Solapur · File No. {patient.fileNo || "—"} · {fmtDate(todayISO())}</p>
+          <div className="flex flex-col gap-2 mb-4">
+            {patientFiles.map((f) => (
+              <div key={f.id} className="flex items-center justify-between gap-3 rounded-xl p-3" style={{ background: C.slateTint }}>
+                <a href={f.dataUrl} download={f.name} className="flex items-center gap-2 text-sm min-w-0" style={{ color: C.ink }}>
+                  <FileText size={16} style={{ color: C.inkFaint, flexShrink: 0 }} />
+                  <span className="truncate">{f.name}</span>
+                </a>
+                <button type="button" onClick={() => onRemoveFile(patient.id, f.id)}><Trash2 size={14} style={{ color: C.inkFaint }} /></button>
               </div>
-              <div className="flex gap-2 no-print">
-                <Btn size="sm" variant="ghost" onClick={() => window.print()}>Print / Save PDF</Btn>
-                <Btn size="sm" icon={Plus} onClick={() => setBillOpen(true)}>Add Charge</Btn>
-              </div>
-            </div>
-            <div className="overflow-x-auto emr-scroll mt-4">
-              <table className="w-full text-sm">
-                <thead><tr className="text-left" style={{ color: C.inkFaint }}>
-                  <th className="pb-2 font-medium">Date</th><th className="pb-2 font-medium">Category</th><th className="pb-2 font-medium">Description</th>
-                  <th className="pb-2 font-medium text-right">Amount</th><th className="pb-2 font-medium no-print"></th>
-                </tr></thead>
-                <tbody>
-                  {_.orderBy(pBilling, ["date"], ["desc"]).map((b) => (
-                    <tr key={b.id} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                      <td className="py-2">{fmtDate(b.date)}</td><td className="py-2"><Badge>{b.category}</Badge></td>
-                      <td className="py-2">{b.description || "—"}</td><td className="py-2 text-right">₹{(Number(b.amount) || 0).toLocaleString("en-IN")}</td>
-                      <td className="py-2 no-print"><button onClick={() => onRemoveBillingItem(b.id)}><Trash2 size={14} style={{ color: C.inkFaint }} /></button></td>
-                    </tr>
-                  ))}
-                  {pBilling.length === 0 && <tr><td colSpan={5} className="py-4 text-center" style={{ color: C.inkFaint }}>No charges recorded yet.</td></tr>}
-                </tbody>
-                <tfoot>
-                  <tr style={{ borderTop: `2px solid ${C.border}` }}>
-                    <td colSpan={3} className="py-2 text-right font-semibold" style={{ color: C.ink }}>Total Billed</td>
-                    <td className="py-2 text-right font-semibold" style={{ color: C.ink }}>₹{totalBilled.toLocaleString("en-IN")}</td><td className="no-print"></td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </Card>
-
-          <Card className="p-5">
-            <div className="flex items-center justify-between mb-3 no-print">
-              <SectionTitle icon={ClipboardList}>Payments Received</SectionTitle>
-              <Btn size="sm" variant="subtle" icon={Plus} onClick={() => setPayOpen(true)}>Record Payment</Btn>
-            </div>
-            <div className="overflow-x-auto emr-scroll">
-              <table className="w-full text-sm">
-                <thead><tr className="text-left" style={{ color: C.inkFaint }}>
-                  <th className="pb-2 font-medium">Date</th><th className="pb-2 font-medium">Mode</th><th className="pb-2 font-medium">Note</th>
-                  <th className="pb-2 font-medium text-right">Amount</th><th className="pb-2 font-medium no-print"></th>
-                </tr></thead>
-                <tbody>
-                  {_.orderBy(pPayments, ["date"], ["desc"]).map((p) => (
-                    <tr key={p.id} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                      <td className="py-2">{fmtDate(p.date)}</td><td className="py-2">{p.mode}</td><td className="py-2">{p.note || "—"}</td>
-                      <td className="py-2 text-right">₹{(Number(p.amount) || 0).toLocaleString("en-IN")}</td>
-                      <td className="py-2 no-print"><button onClick={() => onRemovePayment(p.id)}><Trash2 size={14} style={{ color: C.inkFaint }} /></button></td>
-                    </tr>
-                  ))}
-                  {pPayments.length === 0 && <tr><td colSpan={5} className="py-4 text-center" style={{ color: C.inkFaint }}>No payments recorded yet.</td></tr>}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-          {billOpen && <BillingItemModal onClose={() => setBillOpen(false)} onSave={(item) => { onAddBillingItem(patient.id, item); setBillOpen(false); }} />}
-          {payOpen && <PaymentModal onClose={() => setPayOpen(false)} onSave={(p) => { onAddPayment(patient.id, p); setPayOpen(false); }} />}
-        </div>
+            ))}
+            {patientFiles.length === 0 && <p className="text-sm" style={{ color: C.inkFaint }}>No files uploaded yet.</p>}
+          </div>
+          {patientFiles.length < MAX_FILES && (
+            <>
+              <label htmlFor="patient-file-input" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer w-fit"
+                style={{ background: C.primaryTint, color: C.primaryDark }}>
+                <Upload size={13} /> {fileBusy ? "Uploading…" : "Add File"}
+              </label>
+              <input
+                id="patient-file-input"
+                type="file"
+                accept={FILE_ACCEPT}
+                className="hidden"
+                disabled={fileBusy}
+                onChange={async (e) => {
+                  const file = e.target.files && e.target.files[0];
+                  e.target.value = "";
+                  if (!file) return;
+                  setFileError("");
+                  if (file.size > MAX_FILE_SIZE) { setFileError("File is larger than 5MB — please choose a smaller file."); return; }
+                  setFileBusy(true);
+                  try {
+                    const dataUrl = await readFileAsDataURL(file);
+                    await onAddFile(patient.id, { id: uid(), name: file.name, type: file.type, size: file.size, dataUrl, uploadedAt: new Date().toISOString() });
+                  } finally {
+                    setFileBusy(false);
+                  }
+                }}
+              />
+              {fileError && <p className="text-xs mt-2 flex items-center gap-1" style={{ color: C.brick }}><AlertCircle size={13} />{fileError}</p>}
+            </>
+          )}
+        </Card>
       )}
     </div>
   );
@@ -1806,7 +1781,7 @@ function ModalShell({ title, onClose, children, wide }) {
   );
 }
 
-function PrescriptionModal({ onClose, onSave }) {
+function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS }) {
   const [date, setDate] = useState(todayISO());
   const [doctor, setDoctor] = useState("");
   const [advice, setAdvice] = useState("");
@@ -1825,7 +1800,7 @@ function PrescriptionModal({ onClose, onSave }) {
       <div className="flex flex-col gap-3 mb-3">
         {meds.map((m) => (
           <div key={m.id} className="grid sm:grid-cols-5 gap-2 items-start rounded-xl p-3" style={{ background: C.slateTint }}>
-            <DropdownOtherField label="Drug Name" value={m.name} onChange={(v) => updMed(m.id, "name", v)} options={DRUG_OPTIONS} />
+            <DropdownOtherField label="Drug Name" value={m.name} onChange={(v) => updMed(m.id, "name", v)} options={drugOptions} />
             <DropdownOtherField label="Dose" value={m.dosage} onChange={(v) => updMed(m.id, "dosage", v)} options={DOSE_OPTIONS} />
             <DropdownOtherField label="Frequency" value={m.frequency} onChange={(v) => updMed(m.id, "frequency", v)} options={FREQUENCY_OPTIONS} />
             <DropdownOtherField label="Duration" value={m.duration} onChange={(v) => updMed(m.id, "duration", v)} options={DURATION_OPTIONS} />
@@ -1903,48 +1878,6 @@ function ReportPickerModal({ title, onClose, onSave, fields }) {
   );
 }
 
-function BillingItemModal({ onClose, onSave }) {
-  const [date, setDate] = useState(todayISO());
-  const [category, setCategory] = useState(BILLING_CATEGORIES[0]);
-  const [description, setDescription] = useState("");
-  const [amount, setAmount] = useState("");
-  return (
-    <ModalShell title="Add Charge" onClose={onClose}>
-      <div className="flex flex-col gap-4">
-        <TextField label="Date" type="date" value={date} onChange={setDate} />
-        <SelectField label="Category" value={category} onChange={setCategory} options={BILLING_CATEGORIES} />
-        <TextField label="Description" value={description} onChange={setDescription} placeholder="e.g. IUI Cycle 2 — procedure charge" />
-        <TextField label="Amount (₹)" type="number" value={amount} onChange={setAmount} />
-      </div>
-      <div className="flex justify-end gap-2 mt-5">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn icon={Save} onClick={() => onSave({ id: uid(), date, category, description, amount })} disabled={!amount}>Save Charge</Btn>
-      </div>
-    </ModalShell>
-  );
-}
-
-function PaymentModal({ onClose, onSave }) {
-  const [date, setDate] = useState(todayISO());
-  const [mode, setMode] = useState(PAYMENT_MODES[0]);
-  const [note, setNote] = useState("");
-  const [amount, setAmount] = useState("");
-  return (
-    <ModalShell title="Record Payment" onClose={onClose}>
-      <div className="flex flex-col gap-4">
-        <TextField label="Date" type="date" value={date} onChange={setDate} />
-        <SelectField label="Mode" value={mode} onChange={setMode} options={PAYMENT_MODES} />
-        <TextField label="Note" value={note} onChange={setNote} placeholder="e.g. Advance for IVF cycle" />
-        <TextField label="Amount (₹)" type="number" value={amount} onChange={setAmount} />
-      </div>
-      <div className="flex justify-end gap-2 mt-5">
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn icon={Save} onClick={() => onSave({ id: uid(), date, mode, note, amount })} disabled={!amount}>Save Payment</Btn>
-      </div>
-    </ModalShell>
-  );
-}
-
 /* ---------------------------------------------------------------------
    Root App
 --------------------------------------------------------------------- */
@@ -1954,8 +1887,6 @@ export default function App() {
   const [patients, setPatients] = useState([]);
   const [prescriptions, setPrescriptions] = useState([]);
   const [cycles, setCycles] = useState([]);
-  const [billingItems, setBillingItems] = useState([]);
-  const [payments, setPayments] = useState([]);
   const [view, setView] = useState("dashboard");
   const [selectedId, setSelectedId] = useState(null);
   const [editingPatient, setEditingPatient] = useState(null);
@@ -1992,11 +1923,7 @@ export default function App() {
         }
 
         const cy = await storageGet("cycles", []);
-        const bi = await storageGet("billingItems", []);
-        const pay = await storageGet("payments", []);
         setCycles(cy);
-        setBillingItems(bi);
-        setPayments(pay);
       } catch (error) {
         // A missing web session is normal on first load; do not show a false
         // "could not load patients" error before the login screen appears.
@@ -2012,8 +1939,6 @@ export default function App() {
   const persistPatients = async (next) => { setPatients(next); if (!IS_WEB) await storageSet("patients", next); };
   const persistRx = async (next) => { setPrescriptions(next); if (!IS_WEB) await storageSet("prescriptions", next); };
   const persistCycles = async (next) => { setCycles(next); await storageSet("cycles", next); };
-  const persistBilling = async (next) => { setBillingItems(next); await storageSet("billingItems", next); };
-  const persistPayments = async (next) => { setPayments(next); await storageSet("payments", next); };
 
   const handleLogin = async (username, password) => {
   const api = window?.api;
@@ -2148,8 +2073,6 @@ export default function App() {
     await persistPatients(patients.filter((p) => p.id !== id));
     await persistRx(prescriptions.filter((r) => r.patientId !== id));
     await persistCycles(cycles.filter((c) => c.patientId !== id));
-    await persistBilling(billingItems.filter((b) => b.patientId !== id));
-    await persistPayments(payments.filter((p) => p.patientId !== id));
     showToast("Patient record removed.");
   };
 
@@ -2188,21 +2111,33 @@ export default function App() {
     await persistPatients(next);
     showToast("Semen analysis report added.");
   };
-  const addBillingItem = async (patientId, item) => {
-    await persistBilling([...billingItems, { ...item, patientId }]);
-    showToast("Charge added to bill.");
+  const addFile = async (patientId, file) => {
+    const next = patients.map((p) => p.id === patientId ? { ...p, files: [...(p.files || []), file] } : p);
+    if (IS_WEB) {
+      const changed = next.find((p) => p.id === patientId);
+      try {
+        await updatePatientRemote(patientId, changed);
+      } catch (error) {
+        showToast(error.message || "Could not save file.", "error");
+        return;
+      }
+    }
+    await persistPatients(next);
+    showToast("File uploaded.");
   };
-  const removeBillingItem = async (id) => {
-    await persistBilling(billingItems.filter((b) => b.id !== id));
-    showToast("Charge removed.");
-  };
-  const addPayment = async (patientId, p) => {
-    await persistPayments([...payments, { ...p, patientId }]);
-    showToast("Payment recorded.");
-  };
-  const removePayment = async (id) => {
-    await persistPayments(payments.filter((p) => p.id !== id));
-    showToast("Payment entry removed.");
+  const removeFile = async (patientId, fileId) => {
+    const next = patients.map((p) => p.id === patientId ? { ...p, files: (p.files || []).filter((f) => f.id !== fileId) } : p);
+    if (IS_WEB) {
+      const changed = next.find((p) => p.id === patientId);
+      try {
+        await updatePatientRemote(patientId, changed);
+      } catch (error) {
+        showToast(error.message || "Could not remove file.", "error");
+        return;
+      }
+    }
+    await persistPatients(next);
+    showToast("File removed.");
   };
 
   if (loading) {
@@ -2219,7 +2154,7 @@ export default function App() {
     <div className="emr-root">
       {FONTS}
       <Shell user={currentUser} view={view === "patientDetail" || view === "editPatient" ? "patients" : view} setView={(v) => { setView(v); setEditingPatient(null); }} onLogout={handleLogout} onOpenChangePassword={() => setChangePwOpen(true)} onOpenBackups={openBackups} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}>
-        {view === "dashboard" && <Dashboard patients={patients} billingItems={billingItems} payments={payments} setView={setView} openPatient={openPatient} />}
+        {view === "dashboard" && <Dashboard patients={patients} setView={setView} openPatient={openPatient} />}
         {view === "patients" && <PatientsList patients={patients} openPatient={openPatient} setView={setView} deletePatient={deletePatient} />}
         {view === "newPatient" && <PatientForm onSave={savePatient} onCancel={() => setView("patients")} />}
         {view === "editPatient" && selected && <PatientForm initial={selected} onSave={savePatient} onCancel={() => { setView("patientDetail"); }} />}
@@ -2228,18 +2163,14 @@ export default function App() {
             patient={selected}
             prescriptions={prescriptions}
             cycles={cycles}
-            billingItems={billingItems}
-            payments={payments}
             onBack={() => setView("patients")}
             onEdit={() => setView("editPatient")}
             onAddPrescription={addPrescription}
             onAddCycle={addCycle}
             onAddMonitoring={addMonitoring}
             onAddSemen={(pid) => setSemenModalFor(pid)}
-            onAddBillingItem={addBillingItem}
-            onRemoveBillingItem={removeBillingItem}
-            onAddPayment={addPayment}
-            onRemovePayment={removePayment}
+            onAddFile={addFile}
+            onRemoveFile={removeFile}
           />
         )}
       </Shell>
