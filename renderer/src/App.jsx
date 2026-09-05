@@ -5,7 +5,7 @@ import {
   ChevronLeft, Pill, TestTube2, Baby, ClipboardList, Trash2, Pencil,
   ArrowLeft, AlertCircle, Clock, CheckCircle2, Menu, ShieldCheck,
   FlaskConical, Stethoscope, CalendarClock, Database,
-  IdCard, Upload, ImagePlus, FileText, Printer, Eye
+  IdCard, Upload, ImagePlus, FileText, Printer, Eye, Star
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell
@@ -290,6 +290,10 @@ function blankPatient() {
     nextFollowUp: "",
     cycles: [blankPaperCycle()],
     files: [],
+    // Field ids the doctor has flagged as worth revisiting next appointment
+    // (see flaggableFields() and PatientDetail) — e.g. "exam.bmi",
+    // "invest.hb", "diagnosis".
+    flags: [],
     createdAt: new Date().toISOString(),
   };
 }
@@ -395,6 +399,20 @@ const INVEST_FIELDS = [
    wife-specific tests (Rubella, Pap Smear, APLA). Derived by filtering
    rather than duplicated, so the two never drift apart. */
 const INVEST_FIELDS_HUSBAND = INVEST_FIELDS.filter(([k]) => !["rubella", "papSmear", "apla"].includes(k));
+
+/* Every field a doctor can flag for the next visit (see patient.flags in
+   blankPatient()) — one entry per exam/investigation row plus diagnosis and
+   plan, each with the id used in patient.flags and a human label for the
+   "Flagged for Next Visit" summary. */
+function flaggableFields(patient) {
+  return [
+    ...EXAM_FIELDS.map(([k, label]) => ({ id: `exam.${k}`, label: `Exam — ${label}`, value: patient.exam[k] })),
+    ...INVEST_FIELDS.map(([k, label]) => ({ id: `invest.${k}`, label: `Investigation (Wife) — ${label}`, value: patient.invest[k] })),
+    ...INVEST_FIELDS_HUSBAND.map(([k, label]) => ({ id: `husbandInvest.${k}`, label: `Investigation (Husband) — ${label}`, value: patient.husband.invest[k] })),
+    { id: "diagnosis", label: "Diagnosis", value: patient.diagnosis },
+    { id: "planOfManagement", label: "Plan of Management", value: patient.planOfManagement },
+  ];
+}
 
 const OCCUPATION_OPTIONS = [
   "Self Employed", "Business", "Private Job", "Government Job", "Housewife",
@@ -557,6 +575,15 @@ function PhotoField({ label, value, onChange }) {
 function DropdownOtherField({ label, value, onChange, options, full }) {
   const isKnown = !value || options.includes(value);
   const [showCustom, setShowCustom] = useState(!isKnown);
+
+  // Belt-and-braces: if the value this field is holding is ever a custom
+  // one not in the list — loaded from a saved record, or set some other
+  // way — make sure the free-text box is actually showing for it, instead
+  // of trusting only the state this instance happened to start with.
+  useEffect(() => {
+    if (value && !options.includes(value)) setShowCustom(true);
+  }, [value, options]);
+
   return (
     <label className={"flex flex-col gap-1 " + (full ? "col-span-full" : "")}>
       <span className="text-xs font-medium" style={{ color: C.inkMuted }}>{label}</span>
@@ -575,11 +602,12 @@ function DropdownOtherField({ label, value, onChange, options, full }) {
       </select>
       {showCustom && (
         <input
+          autoFocus
           value={value || ""}
           onChange={(e) => onChange(e.target.value)}
           placeholder={`Enter ${label.toLowerCase()}`}
           className="rounded-lg px-3 py-2 text-sm outline-none mt-1"
-          style={{ border: `1px solid ${C.border}`, color: C.ink, background: "#fff" }}
+          style={{ border: `2px solid ${C.primary}`, color: C.ink, background: "#fff" }}
         />
       )}
     </label>
@@ -688,6 +716,23 @@ function Letterhead({ patient }) {
         </div>
       )}
     </div>
+  );
+}
+
+/* A dt/dd pair with a star toggle, used for every exam/investigation row so
+   a doctor can flag a finding worth revisiting next visit (see
+   flaggableFields() and the "Flagged for Next Visit" summary card). */
+function FlagRow({ label, value, flagId, flagged, onToggle }) {
+  return (
+    <Fragment>
+      <dt style={{ color: C.inkFaint }}>{label}</dt>
+      <dd className="flex items-center gap-1.5" style={{ color: flagged ? C.gold : C.ink, fontWeight: flagged ? 600 : 400 }}>
+        <span>{value || "—"}</span>
+        <button type="button" className="no-print shrink-0" onClick={() => onToggle(flagId)} title={flagged ? "Unhighlight" : "Highlight for next visit"}>
+          <Star size={12} style={{ color: flagged ? C.gold : C.inkFaint }} fill={flagged ? C.gold : "none"} />
+        </button>
+      </dd>
+    </Fragment>
   );
 }
 
@@ -1523,7 +1568,7 @@ function PatientForm({ initial, onSave, onCancel }) {
 /* ---------------------------------------------------------------------
    Patient Detail
 --------------------------------------------------------------------- */
-function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPrescription, onUpdatePrescription, onDeletePrescription, onAddCycle, onAddMonitoring, onAddSemen, onAddFile, onRemoveFile }) {
+function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPrescription, onUpdatePrescription, onDeletePrescription, onAddCycle, onAddMonitoring, onAddSemen, onAddFile, onRemoveFile, onSaveFlags }) {
   const [tab, setTab] = useState("overview");
   const [rxOpen, setRxOpen] = useState(false);
   const [editRxId, setEditRxId] = useState(null);
@@ -1533,6 +1578,19 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
   const [monOpen, setMonOpen] = useState(null);
   const [fileBusy, setFileBusy] = useState(false);
   const [fileError, setFileError] = useState("");
+  const [pendingFlags, setPendingFlags] = useState(patient.flags || []);
+
+  // Flags are edited locally (toggled from Overview or Reports) and only
+  // written back on "Save Highlights" — resync only when navigating to a
+  // different patient, so an unrelated patient update elsewhere (a new
+  // file, a semen report) never clobbers unsaved toggles.
+  useEffect(() => { setPendingFlags(patient.flags || []); }, [patient.id]);
+  const toggleFlag = (id) => setPendingFlags((prev) => prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]);
+  const flagsDirty = !_.isEqual(_.sortBy(pendingFlags), _.sortBy(patient.flags || []));
+  const flaggedItems = useMemo(
+    () => flaggableFields(patient).filter((f) => pendingFlags.includes(f.id) && f.value),
+    [patient, pendingFlags]
+  );
 
   // Printing a single prescription (see the hidden .print-only block below)
   // needs its content committed to the DOM before window.print() reads the
@@ -1556,7 +1614,7 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
   // patient's prescription is folded back into the dropdown here, so it
   // only needs to be typed once — no separate "custom drugs" list to store.
   const drugOptions = useMemo(
-    () => _.uniq([...DRUG_OPTIONS, ..._.flatMap(prescriptions, (rx) => (rx.medicines || []).map((m) => m.name))].filter(Boolean)),
+    () => _.uniq([...DRUG_OPTIONS, ..._.flatMap(prescriptions, (rx) => (rx.medicines || []).map((m) => m.name))].filter(Boolean).map((s) => s.toUpperCase())),
     [prescriptions]
   );
 
@@ -1565,7 +1623,10 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
       <div className="flex items-center gap-3 no-print">
         <button onClick={onBack}><ArrowLeft size={18} style={{ color: C.inkMuted }} /></button>
         {patient.photoW && (
-          <img src={patient.photoW} alt="" className="rounded-full object-cover shrink-0" style={{ width: 40, height: 40, border: `1px solid ${C.border}` }} />
+          <img src={patient.photoW} alt="Wife" title="Wife" className="rounded-full object-cover shrink-0" style={{ width: 40, height: 40, border: `1px solid ${C.border}` }} />
+        )}
+        {patient.photoH && (
+          <img src={patient.photoH} alt="Husband" title="Husband" className="rounded-full object-cover shrink-0" style={{ width: 40, height: 40, border: `1px solid ${C.border}` }} />
         )}
         <div className="flex-1">
           <div className="flex items-center gap-2 flex-wrap">
@@ -1575,8 +1636,25 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
           </div>
           <p className="text-sm" style={{ color: C.inkMuted }}>File No. {patient.fileNo || "—"} · Age {patient.ageW || "—"}/{patient.ageH || "—"} · {patient.typeInfertility || "Infertility type not set"}</p>
         </div>
+        {flagsDirty && (
+          <Btn variant="subtle" icon={Save} onClick={() => onSaveFlags(patient.id, pendingFlags)}>Save Highlights</Btn>
+        )}
         <Btn variant="ghost" icon={Pencil} onClick={onEdit}>Edit</Btn>
       </div>
+
+      {flaggedItems.length > 0 && (
+        <Card className="p-4" style={{ background: C.goldTint, border: `1px solid ${C.gold}` }}>
+          <div className="flex items-center gap-2 mb-2">
+            <Star size={15} style={{ color: C.gold }} fill={C.gold} />
+            <p className="text-sm font-semibold" style={{ color: C.primaryDark }}>Flagged for Next Visit</p>
+          </div>
+          <ul className="text-sm flex flex-col gap-1">
+            {flaggedItems.map((f) => (
+              <li key={f.id} style={{ color: C.ink }}>• <strong>{f.label}:</strong> {f.value}</li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       <div className="flex gap-1 overflow-x-auto emr-scroll border-b no-print" style={{ borderColor: C.border }}>
         {[["overview", "Overview"], ["reports", "Reports"], ["prescriptions", "Prescriptions"], ["cycles", "IUI / IVF Cycles"], ["files", "Files"]].map(([k, label]) => (
@@ -1598,6 +1676,7 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
             <SectionTitle icon={ClipboardList}>Registration & History</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm">
               {[["Ref. Doctor", patient.refDoctor], ["Reg. Date", fmtDate(patient.regDate)], ["Address", patient.address], ["Phone (W)", patient.phoneW], ["Phone (H)", patient.phoneH],
+              ["Age (W)", patient.ageW], ["Age (H)", patient.ageH], ["Education (W)", patient.eduW], ["Education (H)", patient.eduH],
               ["Occupation (W)", patient.occW], ["Occupation (H)", patient.occH], ["Aadhaar (W)", patient.aadhaarW], ["Aadhaar (H)", patient.aadhaarH],
               ["Married Since", patient.marriedSince], ["Type of Infertility", patient.typeInfertility], ["Menstrual History", patient.menstrualHistory], ["LMP", fmtDate(patient.lmp)],
               ["Obstetric History", patient.obstetricHistory], ["Past/Family History", patient.pastFamilyHistory]].map(([l, v]) => (
@@ -1611,25 +1690,37 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
             <SectionTitle icon={Stethoscope}>Examination (Wife)</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm mb-4">
               {EXAM_FIELDS.map(([k, label]) => (
-                <Fragment key={k}>
-                  <dt style={{ color: C.inkFaint }}>{label}</dt><dd style={{ color: C.ink }}>{patient.exam[k] || "—"}</dd>
-                </Fragment>
+                <FlagRow key={k} label={label} value={patient.exam[k]} flagId={`exam.${k}`} flagged={pendingFlags.includes(`exam.${k}`)} onToggle={toggleFlag} />
               ))}
             </dl>
             <SectionTitle icon={TestTube2}>Investigations (Wife)</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm">
               {INVEST_FIELDS.map(([k, label]) => (
-                <Fragment key={k}>
-                  <dt style={{ color: C.inkFaint }}>{label}</dt><dd style={{ color: C.ink }}>{patient.invest[k] || "—"}</dd>
-                </Fragment>
+                <FlagRow key={k} label={label} value={patient.invest[k]} flagId={`invest.${k}`} flagged={pendingFlags.includes(`invest.${k}`)} onToggle={toggleFlag} />
               ))}
             </dl>
           </Card>
           <Card className="p-5 lg:col-span-2">
             <SectionTitle icon={ClipboardList}>Diagnosis & Plan</SectionTitle>
             <div className="grid sm:grid-cols-2 gap-4 text-sm mb-5">
-              <div><p className="text-xs mb-1" style={{ color: C.inkFaint }}>Diagnosis</p><p style={{ color: C.ink }}>{patient.diagnosis || "—"}</p></div>
-              <div><p className="text-xs mb-1" style={{ color: C.inkFaint }}>Plan of Management</p><p style={{ color: C.ink }}>{patient.planOfManagement || "—"}</p></div>
+              <div>
+                <p className="text-xs mb-1 flex items-center gap-1.5" style={{ color: C.inkFaint }}>
+                  Diagnosis
+                  <button type="button" className="no-print" onClick={() => toggleFlag("diagnosis")} title={pendingFlags.includes("diagnosis") ? "Unhighlight" : "Highlight for next visit"}>
+                    <Star size={12} style={{ color: pendingFlags.includes("diagnosis") ? C.gold : C.inkFaint }} fill={pendingFlags.includes("diagnosis") ? C.gold : "none"} />
+                  </button>
+                </p>
+                <p style={{ color: pendingFlags.includes("diagnosis") ? C.gold : C.ink, fontWeight: pendingFlags.includes("diagnosis") ? 600 : 400 }}>{patient.diagnosis || "—"}</p>
+              </div>
+              <div>
+                <p className="text-xs mb-1 flex items-center gap-1.5" style={{ color: C.inkFaint }}>
+                  Plan of Management
+                  <button type="button" className="no-print" onClick={() => toggleFlag("planOfManagement")} title={pendingFlags.includes("planOfManagement") ? "Unhighlight" : "Highlight for next visit"}>
+                    <Star size={12} style={{ color: pendingFlags.includes("planOfManagement") ? C.gold : C.inkFaint }} fill={pendingFlags.includes("planOfManagement") ? C.gold : "none"} />
+                  </button>
+                </p>
+                <p style={{ color: pendingFlags.includes("planOfManagement") ? C.gold : C.ink, fontWeight: pendingFlags.includes("planOfManagement") ? 600 : 400 }}>{patient.planOfManagement || "—"}</p>
+              </div>
               <div><p className="text-xs mb-1" style={{ color: C.inkFaint }}>Next Follow-up</p><p style={{ color: C.ink }}>{fmtDate(patient.nextFollowUp)}</p></div>
             </div>
             <SectionTitle icon={CalendarClock} sub="OPD monitoring chart">Cycle Monitoring</SectionTitle>
@@ -1660,9 +1751,7 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
             <SectionTitle icon={TestTube2} sub="Husband">Investigations (Husband)</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm">
               {INVEST_FIELDS_HUSBAND.map(([k, label]) => (
-                <Fragment key={k}>
-                  <dt style={{ color: C.inkFaint }}>{label}</dt><dd style={{ color: C.ink }}>{patient.husband.invest[k] || "—"}</dd>
-                </Fragment>
+                <FlagRow key={k} label={label} value={patient.husband.invest[k]} flagId={`husbandInvest.${k}`} flagged={pendingFlags.includes(`husbandInvest.${k}`)} onToggle={toggleFlag} />
               ))}
             </dl>
           </Card>
@@ -1891,6 +1980,16 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
   const updMed = (id, k, v) => setMeds(meds.map((m) => m.id === id ? { ...m, [k]: v } : m));
   const rmMed = (id) => setMeds(meds.filter((m) => m.id !== id));
 
+  // Medicine names typed into this form (not yet saved) are folded into the
+  // dropdown right away, so a custom drug typed for one row is immediately
+  // pickable for the next row in the same prescription — not just the next
+  // prescription (see the `drugOptions` prop, which only knows about
+  // already-saved prescriptions).
+  const liveDrugOptions = useMemo(
+    () => _.uniq([...drugOptions, ...meds.map((m) => m.name)].filter(Boolean).map((s) => s.toUpperCase())),
+    [drugOptions, meds]
+  );
+
   return (
     <ModalShell title={initial ? "Edit Prescription" : "New Prescription"} onClose={onClose} wide>
       <div className="grid sm:grid-cols-2 gap-4 mb-4">
@@ -1901,7 +2000,7 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
       <div className="flex flex-col gap-3 mb-3">
         {meds.map((m) => (
           <div key={m.id} className="grid sm:grid-cols-5 gap-2 items-start rounded-xl p-3" style={{ background: C.slateTint }}>
-            <DropdownOtherField label="Drug Name" value={m.name} onChange={(v) => updMed(m.id, "name", v)} options={drugOptions} />
+            <DropdownOtherField label="Drug Name" value={m.name} onChange={(v) => updMed(m.id, "name", v.toUpperCase())} options={liveDrugOptions} />
             <DropdownOtherField label="Dose" value={m.dosage} onChange={(v) => updMed(m.id, "dosage", v)} options={DOSE_OPTIONS} />
             <DropdownOtherField label="Frequency" value={m.frequency} onChange={(v) => updMed(m.id, "frequency", v)} options={FREQUENCY_OPTIONS} />
             <DropdownOtherField label="Duration" value={m.duration} onChange={(v) => updMed(m.id, "duration", v)} options={DURATION_OPTIONS} />
@@ -2284,6 +2383,20 @@ export default function App() {
     await persistPatients(next);
     showToast("File uploaded.");
   };
+  const saveFlags = async (patientId, flags) => {
+    const next = patients.map((p) => p.id === patientId ? { ...p, flags } : p);
+    if (IS_WEB) {
+      const changed = next.find((p) => p.id === patientId);
+      try {
+        await updatePatientRemote(patientId, changed);
+      } catch (error) {
+        showToast(error.message || "Could not save highlights.", "error");
+        return;
+      }
+    }
+    await persistPatients(next);
+    showToast("Highlights saved.");
+  };
   const removeFile = async (patientId, fileId) => {
     const next = patients.map((p) => p.id === patientId ? { ...p, files: (p.files || []).filter((f) => f.id !== fileId) } : p);
     if (IS_WEB) {
@@ -2332,6 +2445,7 @@ export default function App() {
             onAddSemen={(pid) => setSemenModalFor(pid)}
             onAddFile={addFile}
             onRemoveFile={removeFile}
+            onSaveFlags={saveFlags}
           />
         )}
       </Shell>
