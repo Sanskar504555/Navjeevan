@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, Fragment } from "react";
+import { useState, useEffect, useMemo, useContext, createContext, Fragment } from "react";
 import _ from "lodash";
 import {
   LayoutDashboard, Users, UserPlus, LogOut, Search, Plus, X, Save,
@@ -290,10 +290,11 @@ function blankPatient() {
     nextFollowUp: "",
     cycles: [blankPaperCycle()],
     files: [],
-    // Field ids the doctor has flagged as worth revisiting next appointment
-    // (see flaggableFields() and PatientDetail) — e.g. "exam.bmi",
-    // "invest.hb", "diagnosis".
-    flags: [],
+    // Field ids the doctor has highlighted as worth revisiting next
+    // appointment, mapped to "yellow" | "red" — see HighlightContext.
+    // Keys are the same dot-paths set() uses in PatientForm (e.g.
+    // "exam.bmi", "husband.invest.hb", "diagnosis").
+    highlights: {},
     createdAt: new Date().toISOString(),
   };
 }
@@ -415,17 +416,44 @@ function groupMedicines(medicines) {
   return groups;
 }
 
-/* Every field a doctor can flag for the next visit (see patient.flags in
-   blankPatient()) — one entry per exam/investigation row plus diagnosis and
-   plan, each with the id used in patient.flags and a human label for the
-   "Flagged for Next Visit" summary. */
-function flaggableFields(patient) {
+/* Every read-only field in PatientDetail's Overview/Reports that can be
+   highlighted, for the "Highlighted for Next Visit" summary card. Ids match
+   the dot-paths PatientForm's set() uses for the same field (e.g.
+   "exam.bmi", "husband.invest.hb"), so a highlight made while editing and
+   one made while reviewing land on the exact same key — see
+   HighlightContext. Dynamic per-row tables (hormone panels, semen
+   analysis, cycle monitoring) aren't included; those don't fit a fixed
+   field id. */
+function highlightableFields(patient) {
   return [
+    { id: "refDoctor", label: "Ref. Doctor", value: patient.refDoctor },
+    { id: "address", label: "Address", value: patient.address },
+    { id: "phoneW", label: "Phone (W)", value: patient.phoneW },
+    { id: "phoneH", label: "Phone (H)", value: patient.phoneH },
+    { id: "ageW", label: "Age (W)", value: patient.ageW },
+    { id: "ageH", label: "Age (H)", value: patient.ageH },
+    { id: "eduW", label: "Education (W)", value: patient.eduW },
+    { id: "eduH", label: "Education (H)", value: patient.eduH },
+    { id: "occW", label: "Occupation (W)", value: patient.occW },
+    { id: "occH", label: "Occupation (H)", value: patient.occH },
+    { id: "aadhaarW", label: "Aadhaar (W)", value: patient.aadhaarW },
+    { id: "aadhaarH", label: "Aadhaar (H)", value: patient.aadhaarH },
+    { id: "marriedSince", label: "Married Since", value: patient.marriedSince },
+    { id: "typeInfertility", label: "Type of Infertility", value: patient.typeInfertility },
+    { id: "menstrualHistory", label: "Menstrual History", value: patient.menstrualHistory },
+    { id: "lmp", label: "LMP", value: patient.lmp },
+    { id: "obstetricHistory", label: "Obstetric History", value: patient.obstetricHistory },
+    { id: "pastFamilyHistory", label: "Past/Family History", value: patient.pastFamilyHistory },
     ...EXAM_FIELDS.map(([k, label]) => ({ id: `exam.${k}`, label: `Exam — ${label}`, value: patient.exam[k] })),
     ...INVEST_FIELDS.map(([k, label]) => ({ id: `invest.${k}`, label: `Investigation (Wife) — ${label}`, value: patient.invest[k] })),
-    ...INVEST_FIELDS_HUSBAND.map(([k, label]) => ({ id: `husbandInvest.${k}`, label: `Investigation (Husband) — ${label}`, value: patient.husband.invest[k] })),
+    ...INVEST_FIELDS_HUSBAND.map(([k, label]) => ({ id: `husband.invest.${k}`, label: `Investigation (Husband) — ${label}`, value: patient.husband.invest[k] })),
     { id: "diagnosis", label: "Diagnosis", value: patient.diagnosis },
     { id: "planOfManagement", label: "Plan of Management", value: patient.planOfManagement },
+    { id: "laparoscopy.findings", label: "Laparoscopy", value: patient.laparoscopy.findings },
+    { id: "hsg.findings", label: "HSG", value: patient.hsg.findings },
+    { id: "hysteroscopy.findings", label: "Hysteroscopy", value: patient.hysteroscopy.findings },
+    { id: "pcr.result", label: "PCR", value: patient.pcr.result },
+    { id: "cbnaat.result", label: "CBNAAT", value: patient.cbnaat.result },
   ];
 }
 
@@ -473,34 +501,98 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB per file
 const FILE_ACCEPT = ".doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/jpeg,image/png,application/pdf";
 
 /* ---------------------------------------------------------------------
+   Field highlighting — any field can be marked yellow/red by whoever's
+   using the form or reviewing the record, so it stands out for the next
+   visit. A single HighlightContext (provided by PatientForm when editing,
+   and by PatientDetail when reviewing) holds the current {fieldId: color}
+   map plus a toggle function; every field primitive below reads it via
+   useHighlight(highlightId) and renders the same two dots. Field ids are
+   the same dot-paths already used by PatientForm's set(path, val) (e.g.
+   "exam.bmi", "husband.invest.hb", "diagnosis"), so a highlight set while
+   editing shows up identically when just reviewing the record, and
+   vice versa.
+--------------------------------------------------------------------- */
+const HighlightContext = createContext(null);
+function useHighlight(id) {
+  const ctx = useContext(HighlightContext);
+  if (!ctx || !id) return null;
+  return { color: ctx.highlights[id] || null, toggle: (color) => ctx.onToggle(id, color) };
+}
+const HIGHLIGHT_COLORS = {
+  yellow: { dot: C.gold, bg: C.goldTint, border: C.gold },
+  red: { dot: C.brick, bg: C.brickTint, border: C.brick },
+};
+function highlightFieldStyle(h) {
+  if (!h?.color) return {};
+  const c = HIGHLIGHT_COLORS[h.color];
+  return { border: `2px solid ${c.border}`, background: c.bg };
+}
+/* The two small toggle dots shown next to a highlightable field's label.
+   Click a color to mark the field that color; click the same color again
+   to clear it. Renders nothing if this field isn't wired to a highlight
+   context (highlightId omitted) or there's no context (e.g. read-only
+   pages that don't support highlighting). */
+function HighlightDots({ id }) {
+  const h = useHighlight(id);
+  if (!h) return null;
+  return (
+    <span className="inline-flex items-center gap-1 no-print shrink-0">
+      {["yellow", "red"].map((c) => (
+        <button
+          key={c}
+          type="button"
+          title={`Highlight ${c}${h.color === c ? " (click to clear)" : ""}`}
+          onClick={() => h.toggle(h.color === c ? null : c)}
+          style={{
+            width: 10, height: 10, borderRadius: 999, padding: 0, cursor: "pointer",
+            background: HIGHLIGHT_COLORS[c].dot,
+            border: h.color === c ? `2px solid ${HIGHLIGHT_COLORS[c].border}` : "1px solid rgba(0,0,0,0.15)",
+            boxShadow: h.color === c ? `0 0 0 1px #fff inset` : "none",
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+function FieldLabel({ label, highlightId }) {
+  return (
+    <span className="text-xs font-medium flex items-center gap-1.5" style={{ color: C.inkMuted }}>
+      {label}<HighlightDots id={highlightId} />
+    </span>
+  );
+}
+
+/* ---------------------------------------------------------------------
    Small UI primitives
 --------------------------------------------------------------------- */
-function TextField({ label, value, onChange, placeholder, type = "text", full }) {
+function TextField({ label, value, onChange, placeholder, type = "text", full, highlightId }) {
+  const h = useHighlight(highlightId);
   return (
     <label className={"flex flex-col gap-1 " + (full ? "col-span-full" : "")}>
-      <span className="text-xs font-medium" style={{ color: C.inkMuted }}>{label}</span>
+      <FieldLabel label={label} highlightId={highlightId} />
       <input
         type={type}
         value={value || ""}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         className="rounded-lg px-3 py-2 text-sm outline-none transition"
-        style={{ border: `1px solid ${C.border}`, color: C.ink, background: "#fff" }}
+        style={{ border: `1px solid ${C.border}`, color: C.ink, background: "#fff", ...highlightFieldStyle(h) }}
         onFocus={(e) => (e.target.style.borderColor = C.primary)}
-        onBlur={(e) => (e.target.style.borderColor = C.border)}
+        onBlur={(e) => (e.target.style.borderColor = h?.color ? HIGHLIGHT_COLORS[h.color].border : C.border)}
       />
     </label>
   );
 }
-function SelectField({ label, value, onChange, options, full, placeholder }) {
+function SelectField({ label, value, onChange, options, full, placeholder, highlightId }) {
+  const h = useHighlight(highlightId);
   return (
     <label className={"flex flex-col gap-1 " + (full ? "col-span-full" : "")}>
-      <span className="text-xs font-medium" style={{ color: C.inkMuted }}>{label}</span>
+      <FieldLabel label={label} highlightId={highlightId} />
       <select
         value={value || ""}
         onChange={(e) => onChange(e.target.value)}
         className="rounded-lg px-3 py-2 text-sm outline-none"
-        style={{ border: `1px solid ${C.border}`, color: C.ink, background: "#fff" }}
+        style={{ border: `1px solid ${C.border}`, color: C.ink, background: "#fff", ...highlightFieldStyle(h) }}
       >
         {placeholder && !value && <option value="" disabled>{placeholder}</option>}
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
@@ -509,11 +601,12 @@ function SelectField({ label, value, onChange, options, full, placeholder }) {
   );
 }
 /* Text input with a fixed, non-editable unit suffix (e.g. "mm/Hg" for B.P.) */
-function TextFieldWithSuffix({ label, value, onChange, suffix, placeholder }) {
+function TextFieldWithSuffix({ label, value, onChange, suffix, placeholder, highlightId }) {
+  const h = useHighlight(highlightId);
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-xs font-medium" style={{ color: C.inkMuted }}>{label}</span>
-      <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: `1px solid ${C.border}`, background: "#fff" }}>
+      <FieldLabel label={label} highlightId={highlightId} />
+      <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: `1px solid ${C.border}`, background: "#fff", ...highlightFieldStyle(h) }}>
         <input
           value={value || ""}
           placeholder={placeholder}
@@ -587,9 +680,10 @@ function PhotoField({ label, value, onChange }) {
     </div>
   );
 }
-function DropdownOtherField({ label, value, onChange, options, full }) {
+function DropdownOtherField({ label, value, onChange, options, full, highlightId }) {
   const isKnown = !value || options.includes(value);
   const [showCustom, setShowCustom] = useState(!isKnown);
+  const h = useHighlight(highlightId);
 
   // Belt-and-braces: if the value this field is holding is ever a custom
   // one not in the list — loaded from a saved record, or set some other
@@ -601,7 +695,7 @@ function DropdownOtherField({ label, value, onChange, options, full }) {
 
   return (
     <label className={"flex flex-col gap-1 " + (full ? "col-span-full" : "")}>
-      <span className="text-xs font-medium" style={{ color: C.inkMuted }}>{label}</span>
+      <FieldLabel label={label} highlightId={highlightId} />
       <select
         value={showCustom ? "__other__" : (value || "")}
         onChange={(e) => {
@@ -609,7 +703,7 @@ function DropdownOtherField({ label, value, onChange, options, full }) {
           else { setShowCustom(false); onChange(e.target.value); }
         }}
         className="rounded-lg px-3 py-2 text-sm outline-none"
-        style={{ border: `1px solid ${C.border}`, color: C.ink, background: "#fff" }}
+        style={{ border: `1px solid ${C.border}`, color: C.ink, background: "#fff", ...highlightFieldStyle(h) }}
       >
         <option value="">Select…</option>
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
@@ -628,16 +722,17 @@ function DropdownOtherField({ label, value, onChange, options, full }) {
     </label>
   );
 }
-function TextAreaField({ label, value, onChange, rows = 2, full }) {
+function TextAreaField({ label, value, onChange, rows = 2, full, highlightId }) {
+  const h = useHighlight(highlightId);
   return (
     <label className={"flex flex-col gap-1 " + (full ? "col-span-full" : "")}>
-      <span className="text-xs font-medium" style={{ color: C.inkMuted }}>{label}</span>
+      <FieldLabel label={label} highlightId={highlightId} />
       <textarea
         rows={rows}
         value={value || ""}
         onChange={(e) => onChange(e.target.value)}
         className="rounded-lg px-3 py-2 text-sm outline-none resize-none"
-        style={{ border: `1px solid ${C.border}`, color: C.ink, background: "#fff" }}
+        style={{ border: `1px solid ${C.border}`, color: C.ink, background: "#fff", ...highlightFieldStyle(h) }}
       />
     </label>
   );
@@ -734,18 +829,19 @@ function Letterhead({ patient }) {
   );
 }
 
-/* A dt/dd pair with a star toggle, used for every exam/investigation row so
-   a doctor can flag a finding worth revisiting next visit (see
-   flaggableFields() and the "Flagged for Next Visit" summary card). */
-function FlagRow({ label, value, flagId, flagged, onToggle }) {
+/* A dt/dd pair with the shared yellow/red highlight dots, used for every
+   read-only field in Overview/Reports — see highlightableFields() and the
+   "Highlighted for Next Visit" summary card. Reads/writes through the same
+   HighlightContext the edit form uses, keyed by the same field id, so a
+   highlight made in either place shows up in both. */
+function HighlightRow({ label, value, highlightId }) {
+  const h = useHighlight(highlightId);
   return (
     <Fragment>
       <dt style={{ color: C.inkFaint }}>{label}</dt>
-      <dd className="flex items-center gap-1.5" style={{ color: flagged ? C.gold : C.ink, fontWeight: flagged ? 600 : 400 }}>
+      <dd className="flex items-center gap-1.5" style={{ color: h?.color ? HIGHLIGHT_COLORS[h.color].border : C.ink, fontWeight: h?.color ? 600 : 400 }}>
         <span>{value || "—"}</span>
-        <button type="button" className="no-print shrink-0" onClick={() => onToggle(flagId)} title={flagged ? "Unhighlight" : "Highlight for next visit"}>
-          <Star size={12} style={{ color: flagged ? C.gold : C.inkFaint }} fill={flagged ? C.gold : "none"} />
-        </button>
+        <HighlightDots id={highlightId} />
       </dd>
     </Fragment>
   );
@@ -1267,6 +1363,15 @@ function PatientForm({ initial, onSave, onCancel }) {
   const [data, setData] = useState(() => normalizePatient(initial));
   const [tab, setTab] = useState("basic");
   const set = (path, val) => setData((prev) => _.set(_.cloneDeep(prev), path, val));
+  // Highlight ids are flat keys (some containing dots, e.g. "exam.bmi") into
+  // data.highlights — set directly rather than through set()/_.set, which
+  // would otherwise treat a dotted id as a nested path and create
+  // data.highlights.exam.bmi instead of data.highlights["exam.bmi"].
+  const toggleHighlight = (id, color) => setData((prev) => {
+    const highlights = { ...prev.highlights };
+    if (color) highlights[id] = color; else delete highlights[id];
+    return { ...prev, highlights };
+  });
 
   // Height/weight and Sr. Insulin/Fasting Glucose drive the auto-calculated
   // BMI and HOMA-IR fields, so their setters recompute the derived value in
@@ -1320,6 +1425,7 @@ function PatientForm({ initial, onSave, onCancel }) {
   const updSemenRow = (id, key, val) => setData((prev) => ({ ...prev, husband: { ...prev.husband, semenAnalysis: prev.husband.semenAnalysis.map((r) => r.id === id ? { ...r, [key]: val } : r) } }));
 
   return (
+    <HighlightContext.Provider value={{ highlights: data.highlights || {}, onToggle: toggleHighlight }}>
     <div className="flex flex-col gap-5">
       <div className="flex items-center gap-3">
         <button onClick={onCancel}><ArrowLeft size={18} style={{ color: C.inkMuted }} /></button>
@@ -1340,25 +1446,25 @@ function PatientForm({ initial, onSave, onCancel }) {
           <div>
             <SectionTitle icon={ClipboardList}>Registration</SectionTitle>
             <div className="grid sm:grid-cols-3 gap-4">
-              <TextField label="File No." value={data.fileNo} onChange={(v) => set("fileNo", v)} />
-              <TextField label="Ref. by Dr." value={data.refDoctor} onChange={(v) => set("refDoctor", v)} />
-              <TextField label="Date" type="date" value={data.regDate} onChange={(v) => set("regDate", v)} />
-              <TextField label="Patient's Name (Wife)" value={data.patientName} onChange={(v) => set("patientName", v)} full />
-              <TextAreaField label="Address" value={data.address} onChange={(v) => set("address", v)} full />
-              <TextField label="Phone (W)" value={data.phoneW} onChange={(v) => set("phoneW", v)} />
-              <TextField label="Phone (H)" value={data.phoneH} onChange={(v) => set("phoneH", v)} />
-              <SelectField label="Diet" value={data.diet} onChange={(v) => set("diet", v)} options={["Veg", "Non-Veg"]} />
+              <TextField label="File No." value={data.fileNo} onChange={(v) => set("fileNo", v)} highlightId="fileNo" />
+              <TextField label="Ref. by Dr." value={data.refDoctor} onChange={(v) => set("refDoctor", v)} highlightId="refDoctor" />
+              <TextField label="Date" type="date" value={data.regDate} onChange={(v) => set("regDate", v)} highlightId="regDate" />
+              <TextField label="Patient's Name (Wife)" value={data.patientName} onChange={(v) => set("patientName", v)} full highlightId="patientName" />
+              <TextAreaField label="Address" value={data.address} onChange={(v) => set("address", v)} full highlightId="address" />
+              <TextField label="Phone (W)" value={data.phoneW} onChange={(v) => set("phoneW", v)} highlightId="phoneW" />
+              <TextField label="Phone (H)" value={data.phoneH} onChange={(v) => set("phoneH", v)} highlightId="phoneH" />
+              <SelectField label="Diet" value={data.diet} onChange={(v) => set("diet", v)} options={["Veg", "Non-Veg"]} highlightId="diet" />
             </div>
           </div>
           <div>
             <SectionTitle>Age, Education & Occupation</SectionTitle>
             <div className="grid sm:grid-cols-3 gap-4">
-              <TextField label="Age (Wife)" value={data.ageW} onChange={(v) => set("ageW", v)} />
-              <TextField label="Education (Wife)" value={data.eduW} onChange={(v) => set("eduW", v)} />
-              <DropdownOtherField label="Occupation (Wife)" value={data.occW} onChange={(v) => set("occW", v)} options={OCCUPATION_OPTIONS} />
-              <TextField label="Age (Husband)" value={data.ageH} onChange={(v) => set("ageH", v)} />
-              <TextField label="Education (Husband)" value={data.eduH} onChange={(v) => set("eduH", v)} />
-              <DropdownOtherField label="Occupation (Husband)" value={data.occH} onChange={(v) => set("occH", v)} options={OCCUPATION_OPTIONS} />
+              <TextField label="Age (Wife)" value={data.ageW} onChange={(v) => set("ageW", v)} highlightId="ageW" />
+              <TextField label="Education (Wife)" value={data.eduW} onChange={(v) => set("eduW", v)} highlightId="eduW" />
+              <DropdownOtherField label="Occupation (Wife)" value={data.occW} onChange={(v) => set("occW", v)} options={OCCUPATION_OPTIONS} highlightId="occW" />
+              <TextField label="Age (Husband)" value={data.ageH} onChange={(v) => set("ageH", v)} highlightId="ageH" />
+              <TextField label="Education (Husband)" value={data.eduH} onChange={(v) => set("eduH", v)} highlightId="eduH" />
+              <DropdownOtherField label="Occupation (Husband)" value={data.occH} onChange={(v) => set("occH", v)} options={OCCUPATION_OPTIONS} highlightId="occH" />
             </div>
           </div>
           <div>
@@ -1366,12 +1472,12 @@ function PatientForm({ initial, onSave, onCancel }) {
             <div className="grid sm:grid-cols-2 gap-6">
               <div className="flex flex-col gap-4">
                 <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>Wife</p>
-                <TextField label="Aadhaar Number (Wife)" value={data.aadhaarW} onChange={(v) => set("aadhaarW", v)} placeholder="XXXX XXXX XXXX" />
+                <TextField label="Aadhaar Number (Wife)" value={data.aadhaarW} onChange={(v) => set("aadhaarW", v)} placeholder="XXXX XXXX XXXX" highlightId="aadhaarW" />
                 <PhotoField label="Photo (Wife)" value={data.photoW} onChange={(v) => set("photoW", v)} />
               </div>
               <div className="flex flex-col gap-4">
                 <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>Husband</p>
-                <TextField label="Aadhaar Number (Husband)" value={data.aadhaarH} onChange={(v) => set("aadhaarH", v)} placeholder="XXXX XXXX XXXX" />
+                <TextField label="Aadhaar Number (Husband)" value={data.aadhaarH} onChange={(v) => set("aadhaarH", v)} placeholder="XXXX XXXX XXXX" highlightId="aadhaarH" />
                 <PhotoField label="Photo (Husband)" value={data.photoH} onChange={(v) => set("photoH", v)} />
               </div>
             </div>
@@ -1379,12 +1485,12 @@ function PatientForm({ initial, onSave, onCancel }) {
           <div>
             <SectionTitle>Fertility & Menstrual History</SectionTitle>
             <div className="grid sm:grid-cols-2 gap-4">
-              <TextField label="Married Since" value={data.marriedSince} onChange={(v) => set("marriedSince", v)} />
-              <SelectField label="Type of Infertility" value={data.typeInfertility} onChange={(v) => set("typeInfertility", v)} options={TYPE_INFERTILITY_OPTIONS} placeholder="Select…" />
-              <SelectField label="Menstrual History" value={data.menstrualHistory} onChange={(v) => set("menstrualHistory", v)} options={MENSTRUAL_HISTORY_OPTIONS} placeholder="Select…" />
-              <TextField label="LMP" type="date" value={data.lmp} onChange={(v) => set("lmp", v)} />
-              <TextAreaField label="Obstetric History" value={data.obstetricHistory} onChange={(v) => set("obstetricHistory", v)} full />
-              <TextAreaField label="Past / Family History" value={data.pastFamilyHistory} onChange={(v) => set("pastFamilyHistory", v)} full />
+              <TextField label="Married Since" value={data.marriedSince} onChange={(v) => set("marriedSince", v)} highlightId="marriedSince" />
+              <SelectField label="Type of Infertility" value={data.typeInfertility} onChange={(v) => set("typeInfertility", v)} options={TYPE_INFERTILITY_OPTIONS} placeholder="Select…" highlightId="typeInfertility" />
+              <SelectField label="Menstrual History" value={data.menstrualHistory} onChange={(v) => set("menstrualHistory", v)} options={MENSTRUAL_HISTORY_OPTIONS} placeholder="Select…" highlightId="menstrualHistory" />
+              <TextField label="LMP" type="date" value={data.lmp} onChange={(v) => set("lmp", v)} highlightId="lmp" />
+              <TextAreaField label="Obstetric History" value={data.obstetricHistory} onChange={(v) => set("obstetricHistory", v)} full highlightId="obstetricHistory" />
+              <TextAreaField label="Past / Family History" value={data.pastFamilyHistory} onChange={(v) => set("pastFamilyHistory", v)} full highlightId="pastFamilyHistory" />
             </div>
           </div>
         </Card>
@@ -1395,49 +1501,49 @@ function PatientForm({ initial, onSave, onCancel }) {
           <div>
             <SectionTitle icon={Stethoscope} sub="Wife">Examination</SectionTitle>
             <div className="grid sm:grid-cols-4 gap-4">
-              <TextField label="Stature" value={data.exam.stature} onChange={(v) => set("exam.stature", v)} />
-              <TextField label="Height (cm)" value={data.exam.height} onChange={(v) => setExamMeasure("height", v)} />
-              <TextField label="Weight (kg)" value={data.exam.weight} onChange={(v) => setExamMeasure("weight", v)} />
+              <TextField label="Stature" value={data.exam.stature} onChange={(v) => set("exam.stature", v)} highlightId="exam.stature" />
+              <TextField label="Height (cm)" value={data.exam.height} onChange={(v) => setExamMeasure("height", v)} highlightId="exam.height" />
+              <TextField label="Weight (kg)" value={data.exam.weight} onChange={(v) => setExamMeasure("weight", v)} highlightId="exam.weight" />
               <BMIField value={data.exam.bmi} />
-              <SelectField label="Thyroid" value={data.exam.thyroid} onChange={(v) => set("exam.thyroid", v)} options={PRESENT_ABSENT_OPTIONS} placeholder="Select…" />
-              <SelectField label="Hirsutism" value={data.exam.hirsutism} onChange={(v) => set("exam.hirsutism", v)} options={PRESENT_ABSENT_OPTIONS} placeholder="Select…" />
-              <SelectField label="Br. Secretions" value={data.exam.brSecretions} onChange={(v) => set("exam.brSecretions", v)} options={PRESENT_ABSENT_OPTIONS} placeholder="Select…" />
-              <SelectField label="Sec. Sex Characters" value={data.exam.secSexChar} onChange={(v) => set("exam.secSexChar", v)} options={NORMAL_ABNORMAL_OPTIONS} placeholder="Select…" />
-              <TextFieldWithSuffix label="B.P." value={data.exam.bp} onChange={(v) => set("exam.bp", v)} suffix="mm/Hg" placeholder="120/80" />
-              <TextField label="TVS" value={data.exam.tvs} onChange={(v) => set("exam.tvs", v)} />
-              <TextField label="TVS — Uterus" value={data.exam.tvsUterus} onChange={(v) => set("exam.tvsUterus", v)} />
-              <TextField label="TVS — Endometrium" value={data.exam.tvsEndometrium} onChange={(v) => set("exam.tvsEndometrium", v)} />
-              <TextField label="TVS — Cavity" value={data.exam.tvsCavity} onChange={(v) => set("exam.tvsCavity", v)} />
-              <TextField label="TVS — Right Ovary" value={data.exam.tvsRightOvary} onChange={(v) => set("exam.tvsRightOvary", v)} />
-              <TextField label="TVS — Left Ovary" value={data.exam.tvsLeftOvary} onChange={(v) => set("exam.tvsLeftOvary", v)} />
-              <TextField label="R.S." value={data.exam.rs} onChange={(v) => set("exam.rs", v)} />
-              <TextField label="C.V.S." value={data.exam.cvs} onChange={(v) => set("exam.cvs", v)} />
+              <SelectField label="Thyroid" value={data.exam.thyroid} onChange={(v) => set("exam.thyroid", v)} options={PRESENT_ABSENT_OPTIONS} placeholder="Select…" highlightId="exam.thyroid" />
+              <SelectField label="Hirsutism" value={data.exam.hirsutism} onChange={(v) => set("exam.hirsutism", v)} options={PRESENT_ABSENT_OPTIONS} placeholder="Select…" highlightId="exam.hirsutism" />
+              <SelectField label="Br. Secretions" value={data.exam.brSecretions} onChange={(v) => set("exam.brSecretions", v)} options={PRESENT_ABSENT_OPTIONS} placeholder="Select…" highlightId="exam.brSecretions" />
+              <SelectField label="Sec. Sex Characters" value={data.exam.secSexChar} onChange={(v) => set("exam.secSexChar", v)} options={NORMAL_ABNORMAL_OPTIONS} placeholder="Select…" highlightId="exam.secSexChar" />
+              <TextFieldWithSuffix label="B.P." value={data.exam.bp} onChange={(v) => set("exam.bp", v)} suffix="mm/Hg" placeholder="120/80" highlightId="exam.bp" />
+              <TextField label="TVS" value={data.exam.tvs} onChange={(v) => set("exam.tvs", v)} highlightId="exam.tvs" />
+              <TextField label="TVS — Uterus" value={data.exam.tvsUterus} onChange={(v) => set("exam.tvsUterus", v)} highlightId="exam.tvsUterus" />
+              <TextField label="TVS — Endometrium" value={data.exam.tvsEndometrium} onChange={(v) => set("exam.tvsEndometrium", v)} highlightId="exam.tvsEndometrium" />
+              <TextField label="TVS — Cavity" value={data.exam.tvsCavity} onChange={(v) => set("exam.tvsCavity", v)} highlightId="exam.tvsCavity" />
+              <TextField label="TVS — Right Ovary" value={data.exam.tvsRightOvary} onChange={(v) => set("exam.tvsRightOvary", v)} highlightId="exam.tvsRightOvary" />
+              <TextField label="TVS — Left Ovary" value={data.exam.tvsLeftOvary} onChange={(v) => set("exam.tvsLeftOvary", v)} highlightId="exam.tvsLeftOvary" />
+              <TextField label="R.S." value={data.exam.rs} onChange={(v) => set("exam.rs", v)} highlightId="exam.rs" />
+              <TextField label="C.V.S." value={data.exam.cvs} onChange={(v) => set("exam.cvs", v)} highlightId="exam.cvs" />
             </div>
           </div>
           <div>
             <SectionTitle icon={TestTube2} sub="Wife">Investigations</SectionTitle>
             <div className="grid sm:grid-cols-4 gap-4">
-              <TextField label="Hb" value={data.invest.hb} onChange={(v) => set("invest.hb", v)} />
-              <TextField label="Urine" value={data.invest.urine} onChange={(v) => set("invest.urine", v)} />
-              <TextField label="ESR" value={data.invest.esr} onChange={(v) => set("invest.esr", v)} />
-              <TextField label="Bl. Group" value={data.invest.blGroup} onChange={(v) => set("invest.blGroup", v)} />
+              <TextField label="Hb" value={data.invest.hb} onChange={(v) => set("invest.hb", v)} highlightId="invest.hb" />
+              <TextField label="Urine" value={data.invest.urine} onChange={(v) => set("invest.urine", v)} highlightId="invest.urine" />
+              <TextField label="ESR" value={data.invest.esr} onChange={(v) => set("invest.esr", v)} highlightId="invest.esr" />
+              <TextField label="Bl. Group" value={data.invest.blGroup} onChange={(v) => set("invest.blGroup", v)} highlightId="invest.blGroup" />
               <div className="col-span-full -mb-1 mt-1">
                 <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>BSL</p>
               </div>
-              <TextField label="Fasting Sugar (mg/dL)" value={data.invest.bslFasting} onChange={(v) => set("invest.bslFasting", v)} />
-              <TextField label="PP Sugar (mg/dL)" value={data.invest.bslPP} onChange={(v) => set("invest.bslPP", v)} />
-              <TextField label="Random Sugar (mg/dL)" value={data.invest.bslRandom} onChange={(v) => set("invest.bslRandom", v)} />
-              <TextField label="VDRL" value={data.invest.vdrl} onChange={(v) => set("invest.vdrl", v)} />
-              <TextField label="HIV" value={data.invest.hiv} onChange={(v) => set("invest.hiv", v)} />
-              <TextField label="HBs Ag" value={data.invest.hbsAg} onChange={(v) => set("invest.hbsAg", v)} />
-              <TextField label="Sr. Creatinine" value={data.invest.srCreatinine} onChange={(v) => set("invest.srCreatinine", v)} />
-              <TextField label="Sr. Insulin" value={data.invest.srInsulin} onChange={(v) => setWifeHoma("srInsulin", v)} />
-              <TextField label="Fasting Glucose (for HOMA-IR)" value={data.invest.homaGlucose} onChange={(v) => setWifeHoma("homaGlucose", v)} />
+              <TextField label="Fasting Sugar (mg/dL)" value={data.invest.bslFasting} onChange={(v) => set("invest.bslFasting", v)} highlightId="invest.bslFasting" />
+              <TextField label="PP Sugar (mg/dL)" value={data.invest.bslPP} onChange={(v) => set("invest.bslPP", v)} highlightId="invest.bslPP" />
+              <TextField label="Random Sugar (mg/dL)" value={data.invest.bslRandom} onChange={(v) => set("invest.bslRandom", v)} highlightId="invest.bslRandom" />
+              <TextField label="VDRL" value={data.invest.vdrl} onChange={(v) => set("invest.vdrl", v)} highlightId="invest.vdrl" />
+              <TextField label="HIV" value={data.invest.hiv} onChange={(v) => set("invest.hiv", v)} highlightId="invest.hiv" />
+              <TextField label="HBs Ag" value={data.invest.hbsAg} onChange={(v) => set("invest.hbsAg", v)} highlightId="invest.hbsAg" />
+              <TextField label="Sr. Creatinine" value={data.invest.srCreatinine} onChange={(v) => set("invest.srCreatinine", v)} highlightId="invest.srCreatinine" />
+              <TextField label="Sr. Insulin" value={data.invest.srInsulin} onChange={(v) => setWifeHoma("srInsulin", v)} highlightId="invest.srInsulin" />
+              <TextField label="Fasting Glucose (for HOMA-IR)" value={data.invest.homaGlucose} onChange={(v) => setWifeHoma("homaGlucose", v)} highlightId="invest.homaGlucose" />
               <HomaIRField value={data.invest.homaIR} />
-              <TextField label="Rubella" value={data.invest.rubella} onChange={(v) => set("invest.rubella", v)} />
-              <TextField label="Pap Smear" value={data.invest.papSmear} onChange={(v) => set("invest.papSmear", v)} />
-              <TextField label="APLA" value={data.invest.apla} onChange={(v) => set("invest.apla", v)} />
-              <TextField label="Misc." value={data.invest.misc} onChange={(v) => set("invest.misc", v)} />
+              <TextField label="Rubella" value={data.invest.rubella} onChange={(v) => set("invest.rubella", v)} highlightId="invest.rubella" />
+              <TextField label="Pap Smear" value={data.invest.papSmear} onChange={(v) => set("invest.papSmear", v)} highlightId="invest.papSmear" />
+              <TextField label="APLA" value={data.invest.apla} onChange={(v) => set("invest.apla", v)} highlightId="invest.apla" />
+              <TextField label="Misc." value={data.invest.misc} onChange={(v) => set("invest.misc", v)} highlightId="invest.misc" />
             </div>
           </div>
         </Card>
@@ -1463,16 +1569,16 @@ function PatientForm({ initial, onSave, onCancel }) {
           <div>
             <SectionTitle sub="Imaging & procedures">Laparoscopy · HSG · Hysteroscopy · PCR · CBNAAT</SectionTitle>
             <div className="grid sm:grid-cols-2 gap-4">
-              <TextField label="Laparoscopy Date" type="date" value={data.laparoscopy.date} onChange={(v) => set("laparoscopy.date", v)} />
-              <TextField label="Laparoscopy Findings" value={data.laparoscopy.findings} onChange={(v) => set("laparoscopy.findings", v)} />
-              <TextField label="HSG Date" type="date" value={data.hsg.date} onChange={(v) => set("hsg.date", v)} />
-              <TextField label="HSG Findings" value={data.hsg.findings} onChange={(v) => set("hsg.findings", v)} />
-              <TextField label="Hysteroscopy Date" type="date" value={data.hysteroscopy.date} onChange={(v) => set("hysteroscopy.date", v)} />
-              <TextField label="Hysteroscopy Findings" value={data.hysteroscopy.findings} onChange={(v) => set("hysteroscopy.findings", v)} />
-              <TextField label="PCR Date" type="date" value={data.pcr.date} onChange={(v) => set("pcr.date", v)} />
-              <TextField label="PCR Result" value={data.pcr.result} onChange={(v) => set("pcr.result", v)} />
-              <TextField label="CBNAAT Date" type="date" value={data.cbnaat.date} onChange={(v) => set("cbnaat.date", v)} />
-              <TextField label="CBNAAT Result" value={data.cbnaat.result} onChange={(v) => set("cbnaat.result", v)} />
+              <TextField label="Laparoscopy Date" type="date" value={data.laparoscopy.date} onChange={(v) => set("laparoscopy.date", v)} highlightId="laparoscopy.date" />
+              <TextField label="Laparoscopy Findings" value={data.laparoscopy.findings} onChange={(v) => set("laparoscopy.findings", v)} highlightId="laparoscopy.findings" />
+              <TextField label="HSG Date" type="date" value={data.hsg.date} onChange={(v) => set("hsg.date", v)} highlightId="hsg.date" />
+              <TextField label="HSG Findings" value={data.hsg.findings} onChange={(v) => set("hsg.findings", v)} highlightId="hsg.findings" />
+              <TextField label="Hysteroscopy Date" type="date" value={data.hysteroscopy.date} onChange={(v) => set("hysteroscopy.date", v)} highlightId="hysteroscopy.date" />
+              <TextField label="Hysteroscopy Findings" value={data.hysteroscopy.findings} onChange={(v) => set("hysteroscopy.findings", v)} highlightId="hysteroscopy.findings" />
+              <TextField label="PCR Date" type="date" value={data.pcr.date} onChange={(v) => set("pcr.date", v)} highlightId="pcr.date" />
+              <TextField label="PCR Result" value={data.pcr.result} onChange={(v) => set("pcr.result", v)} highlightId="pcr.result" />
+              <TextField label="CBNAAT Date" type="date" value={data.cbnaat.date} onChange={(v) => set("cbnaat.date", v)} highlightId="cbnaat.date" />
+              <TextField label="CBNAAT Result" value={data.cbnaat.result} onChange={(v) => set("cbnaat.result", v)} highlightId="cbnaat.result" />
             </div>
           </div>
         </Card>
@@ -1481,31 +1587,31 @@ function PatientForm({ initial, onSave, onCancel }) {
       {tab === "husband" && (
         <Card className="p-5 flex flex-col gap-6">
           <div className="grid sm:grid-cols-2 gap-4">
-            <TextAreaField label="Habits & Past History" value={data.husband.habitsHistory} onChange={(v) => set("husband.habitsHistory", v)} />
-            <TextAreaField label="Genital Examination" value={data.husband.genitalExam} onChange={(v) => set("husband.genitalExam", v)} />
-            <TextAreaField label="Miscellaneous Investigations" value={data.husband.miscInvestigations} onChange={(v) => set("husband.miscInvestigations", v)} full />
+            <TextAreaField label="Habits & Past History" value={data.husband.habitsHistory} onChange={(v) => set("husband.habitsHistory", v)} highlightId="husband.habitsHistory" />
+            <TextAreaField label="Genital Examination" value={data.husband.genitalExam} onChange={(v) => set("husband.genitalExam", v)} highlightId="husband.genitalExam" />
+            <TextAreaField label="Miscellaneous Investigations" value={data.husband.miscInvestigations} onChange={(v) => set("husband.miscInvestigations", v)} full highlightId="husband.miscInvestigations" />
           </div>
           <div>
             <SectionTitle icon={TestTube2} sub="Husband — same panel as Wife, minus Rubella / Pap Smear / APLA">Investigations</SectionTitle>
             <div className="grid sm:grid-cols-4 gap-4">
-              <TextField label="Hb" value={data.husband.invest.hb} onChange={(v) => set("husband.invest.hb", v)} />
-              <TextField label="Urine" value={data.husband.invest.urine} onChange={(v) => set("husband.invest.urine", v)} />
-              <TextField label="ESR" value={data.husband.invest.esr} onChange={(v) => set("husband.invest.esr", v)} />
-              <TextField label="Bl. Group" value={data.husband.invest.blGroup} onChange={(v) => set("husband.invest.blGroup", v)} />
+              <TextField label="Hb" value={data.husband.invest.hb} onChange={(v) => set("husband.invest.hb", v)} highlightId="husband.invest.hb" />
+              <TextField label="Urine" value={data.husband.invest.urine} onChange={(v) => set("husband.invest.urine", v)} highlightId="husband.invest.urine" />
+              <TextField label="ESR" value={data.husband.invest.esr} onChange={(v) => set("husband.invest.esr", v)} highlightId="husband.invest.esr" />
+              <TextField label="Bl. Group" value={data.husband.invest.blGroup} onChange={(v) => set("husband.invest.blGroup", v)} highlightId="husband.invest.blGroup" />
               <div className="col-span-full -mb-1 mt-1">
                 <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>BSL</p>
               </div>
-              <TextField label="Fasting Sugar (mg/dL)" value={data.husband.invest.bslFasting} onChange={(v) => set("husband.invest.bslFasting", v)} />
-              <TextField label="PP Sugar (mg/dL)" value={data.husband.invest.bslPP} onChange={(v) => set("husband.invest.bslPP", v)} />
-              <TextField label="Random Sugar (mg/dL)" value={data.husband.invest.bslRandom} onChange={(v) => set("husband.invest.bslRandom", v)} />
-              <TextField label="VDRL" value={data.husband.invest.vdrl} onChange={(v) => set("husband.invest.vdrl", v)} />
-              <TextField label="HIV" value={data.husband.invest.hiv} onChange={(v) => set("husband.invest.hiv", v)} />
-              <TextField label="HBs Ag" value={data.husband.invest.hbsAg} onChange={(v) => set("husband.invest.hbsAg", v)} />
-              <TextField label="Sr. Creatinine" value={data.husband.invest.srCreatinine} onChange={(v) => set("husband.invest.srCreatinine", v)} />
-              <TextField label="Sr. Insulin" value={data.husband.invest.srInsulin} onChange={(v) => setHusbandHoma("srInsulin", v)} />
-              <TextField label="Fasting Glucose (for HOMA-IR)" value={data.husband.invest.homaGlucose} onChange={(v) => setHusbandHoma("homaGlucose", v)} />
+              <TextField label="Fasting Sugar (mg/dL)" value={data.husband.invest.bslFasting} onChange={(v) => set("husband.invest.bslFasting", v)} highlightId="husband.invest.bslFasting" />
+              <TextField label="PP Sugar (mg/dL)" value={data.husband.invest.bslPP} onChange={(v) => set("husband.invest.bslPP", v)} highlightId="husband.invest.bslPP" />
+              <TextField label="Random Sugar (mg/dL)" value={data.husband.invest.bslRandom} onChange={(v) => set("husband.invest.bslRandom", v)} highlightId="husband.invest.bslRandom" />
+              <TextField label="VDRL" value={data.husband.invest.vdrl} onChange={(v) => set("husband.invest.vdrl", v)} highlightId="husband.invest.vdrl" />
+              <TextField label="HIV" value={data.husband.invest.hiv} onChange={(v) => set("husband.invest.hiv", v)} highlightId="husband.invest.hiv" />
+              <TextField label="HBs Ag" value={data.husband.invest.hbsAg} onChange={(v) => set("husband.invest.hbsAg", v)} highlightId="husband.invest.hbsAg" />
+              <TextField label="Sr. Creatinine" value={data.husband.invest.srCreatinine} onChange={(v) => set("husband.invest.srCreatinine", v)} highlightId="husband.invest.srCreatinine" />
+              <TextField label="Sr. Insulin" value={data.husband.invest.srInsulin} onChange={(v) => setHusbandHoma("srInsulin", v)} highlightId="husband.invest.srInsulin" />
+              <TextField label="Fasting Glucose (for HOMA-IR)" value={data.husband.invest.homaGlucose} onChange={(v) => setHusbandHoma("homaGlucose", v)} highlightId="husband.invest.homaGlucose" />
               <HomaIRField value={data.husband.invest.homaIR} />
-              <TextField label="Misc." value={data.husband.invest.misc} onChange={(v) => set("husband.invest.misc", v)} />
+              <TextField label="Misc." value={data.husband.invest.misc} onChange={(v) => set("husband.invest.misc", v)} highlightId="husband.invest.misc" />
             </div>
           </div>
           <div>
@@ -1546,11 +1652,11 @@ function PatientForm({ initial, onSave, onCancel }) {
           <div>
             <SectionTitle icon={ClipboardList}>Diagnosis & Plan of Management</SectionTitle>
             <div className="grid sm:grid-cols-2 gap-4">
-              <TextAreaField label="Diagnosis" value={data.diagnosis} onChange={(v) => set("diagnosis", v)} full rows={3} />
-              <TextAreaField label="Plan of Management" value={data.planOfManagement} onChange={(v) => set("planOfManagement", v)} full rows={3} />
-              <SelectField label="Treatment Suggested" value={data.treatmentType} onChange={(v) => set("treatmentType", v)} options={["Optimization", "IUI", "IVF", "Other"]} />
-              <SelectField label="Status" value={data.status} onChange={(v) => set("status", v)} options={["Active", "Follow-up", "Completed", "Discontinued"]} />
-              <TextField label="Next Follow-up Date" type="date" value={data.nextFollowUp} onChange={(v) => set("nextFollowUp", v)} />
+              <TextAreaField label="Diagnosis" value={data.diagnosis} onChange={(v) => set("diagnosis", v)} full rows={3} highlightId="diagnosis" />
+              <TextAreaField label="Plan of Management" value={data.planOfManagement} onChange={(v) => set("planOfManagement", v)} full rows={3} highlightId="planOfManagement" />
+              <SelectField label="Treatment Suggested" value={data.treatmentType} onChange={(v) => set("treatmentType", v)} options={["Optimization", "IUI", "IVF", "Other"]} highlightId="treatmentType" />
+              <SelectField label="Status" value={data.status} onChange={(v) => set("status", v)} options={["Active", "Follow-up", "Completed", "Discontinued"]} highlightId="status" />
+              <TextField label="Next Follow-up Date" type="date" value={data.nextFollowUp} onChange={(v) => set("nextFollowUp", v)} highlightId="nextFollowUp" />
             </div>
           </div>
           <div>
@@ -1577,13 +1683,14 @@ function PatientForm({ initial, onSave, onCancel }) {
         <Btn icon={Save} onClick={() => onSave(data)}>Save Patient</Btn>
       </div>
     </div>
+    </HighlightContext.Provider>
   );
 }
 
 /* ---------------------------------------------------------------------
    Patient Detail
 --------------------------------------------------------------------- */
-function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPrescription, onUpdatePrescription, onDeletePrescription, onAddCycle, onAddMonitoring, onAddSemen, onAddFile, onRemoveFile, onSaveFlags }) {
+function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPrescription, onUpdatePrescription, onDeletePrescription, onAddCycle, onAddMonitoring, onAddSemen, onAddFile, onRemoveFile, onSaveHighlights }) {
   const [tab, setTab] = useState("overview");
   const [rxOpen, setRxOpen] = useState(false);
   const [editRxId, setEditRxId] = useState(null);
@@ -1593,18 +1700,24 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
   const [monOpen, setMonOpen] = useState(null);
   const [fileBusy, setFileBusy] = useState(false);
   const [fileError, setFileError] = useState("");
-  const [pendingFlags, setPendingFlags] = useState(patient.flags || []);
+  const [pendingHighlights, setPendingHighlights] = useState(patient.highlights || {});
 
-  // Flags are edited locally (toggled from Overview or Reports) and only
+  // Highlights are toggled locally (from Overview or Reports) and only
   // written back on "Save Highlights" — resync only when navigating to a
   // different patient, so an unrelated patient update elsewhere (a new
   // file, a semen report) never clobbers unsaved toggles.
-  useEffect(() => { setPendingFlags(patient.flags || []); }, [patient.id]);
-  const toggleFlag = (id) => setPendingFlags((prev) => prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]);
-  const flagsDirty = !_.isEqual(_.sortBy(pendingFlags), _.sortBy(patient.flags || []));
-  const flaggedItems = useMemo(
-    () => flaggableFields(patient).filter((f) => pendingFlags.includes(f.id) && f.value),
-    [patient, pendingFlags]
+  useEffect(() => { setPendingHighlights(patient.highlights || {}); }, [patient.id]);
+  const toggleHighlight = (id, color) => setPendingHighlights((prev) => {
+    const next = { ...prev };
+    if (color) next[id] = color; else delete next[id];
+    return next;
+  });
+  const highlightsDirty = !_.isEqual(pendingHighlights, patient.highlights || {});
+  const highlightedItems = useMemo(
+    () => highlightableFields(patient)
+      .filter((f) => pendingHighlights[f.id] && f.value)
+      .map((f) => ({ ...f, color: pendingHighlights[f.id] })),
+    [patient, pendingHighlights]
   );
 
   // Printing a single prescription (see the hidden .print-only block below)
@@ -1634,6 +1747,7 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
   );
 
   return (
+    <HighlightContext.Provider value={{ highlights: pendingHighlights, onToggle: toggleHighlight }}>
     <div className="flex flex-col gap-5">
       <div className="flex items-center gap-3 no-print">
         <button onClick={onBack}><ArrowLeft size={18} style={{ color: C.inkMuted }} /></button>
@@ -1651,21 +1765,21 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
           </div>
           <p className="text-sm" style={{ color: C.inkMuted }}>File No. {patient.fileNo || "—"} · Age {patient.ageW || "—"}/{patient.ageH || "—"} · {patient.typeInfertility || "Infertility type not set"}</p>
         </div>
-        {flagsDirty && (
-          <Btn variant="subtle" icon={Save} onClick={() => onSaveFlags(patient.id, pendingFlags)}>Save Highlights</Btn>
+        {highlightsDirty && (
+          <Btn variant="subtle" icon={Save} onClick={() => onSaveHighlights(patient.id, pendingHighlights)}>Save Highlights</Btn>
         )}
         <Btn variant="ghost" icon={Pencil} onClick={onEdit}>Edit</Btn>
       </div>
 
-      {flaggedItems.length > 0 && (
+      {highlightedItems.length > 0 && (
         <Card className="p-4" style={{ background: C.goldTint, border: `1px solid ${C.gold}` }}>
           <div className="flex items-center gap-2 mb-2">
             <Star size={15} style={{ color: C.gold }} fill={C.gold} />
-            <p className="text-sm font-semibold" style={{ color: C.primaryDark }}>Flagged for Next Visit</p>
+            <p className="text-sm font-semibold" style={{ color: C.primaryDark }}>Highlighted for Next Visit</p>
           </div>
           <ul className="text-sm flex flex-col gap-1">
-            {flaggedItems.map((f) => (
-              <li key={f.id} style={{ color: C.ink }}>• <strong>{f.label}:</strong> {f.value}</li>
+            {highlightedItems.map((f) => (
+              <li key={f.id} style={{ color: HIGHLIGHT_COLORS[f.color].border }}>• <strong>{f.label}:</strong> {f.value}</li>
             ))}
           </ul>
         </Card>
@@ -1690,34 +1804,44 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
           <Card className="p-5">
             <SectionTitle icon={ClipboardList}>Registration & History</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm">
-              {[["Ref. Doctor", patient.refDoctor], ["Reg. Date", fmtDate(patient.regDate)], ["Address", patient.address], ["Phone (W)", patient.phoneW], ["Phone (H)", patient.phoneH],
-              ["Age (W)", patient.ageW], ["Age (H)", patient.ageH], ["Education (W)", patient.eduW], ["Education (H)", patient.eduH],
-              ["Occupation (W)", patient.occW], ["Occupation (H)", patient.occH], ["Aadhaar (W)", patient.aadhaarW], ["Aadhaar (H)", patient.aadhaarH],
-              ["Married Since", patient.marriedSince], ["Type of Infertility", patient.typeInfertility], ["Menstrual History", patient.menstrualHistory], ["LMP", fmtDate(patient.lmp)],
-              ["Obstetric History", patient.obstetricHistory], ["Past/Family History", patient.pastFamilyHistory]].map(([l, v]) => (
-                <Fragment key={l}>
-                  <dt style={{ color: C.inkFaint }}>{l}</dt><dd style={{ color: C.ink }}>{v || "—"}</dd>
-                </Fragment>
-              ))}
+              <HighlightRow label="Ref. Doctor" value={patient.refDoctor} highlightId="refDoctor" />
+              <Fragment><dt style={{ color: C.inkFaint }}>Reg. Date</dt><dd style={{ color: C.ink }}>{fmtDate(patient.regDate) || "—"}</dd></Fragment>
+              <HighlightRow label="Address" value={patient.address} highlightId="address" />
+              <HighlightRow label="Phone (W)" value={patient.phoneW} highlightId="phoneW" />
+              <HighlightRow label="Phone (H)" value={patient.phoneH} highlightId="phoneH" />
+              <HighlightRow label="Age (W)" value={patient.ageW} highlightId="ageW" />
+              <HighlightRow label="Age (H)" value={patient.ageH} highlightId="ageH" />
+              <HighlightRow label="Education (W)" value={patient.eduW} highlightId="eduW" />
+              <HighlightRow label="Education (H)" value={patient.eduH} highlightId="eduH" />
+              <HighlightRow label="Occupation (W)" value={patient.occW} highlightId="occW" />
+              <HighlightRow label="Occupation (H)" value={patient.occH} highlightId="occH" />
+              <HighlightRow label="Aadhaar (W)" value={patient.aadhaarW} highlightId="aadhaarW" />
+              <HighlightRow label="Aadhaar (H)" value={patient.aadhaarH} highlightId="aadhaarH" />
+              <HighlightRow label="Married Since" value={patient.marriedSince} highlightId="marriedSince" />
+              <HighlightRow label="Type of Infertility" value={patient.typeInfertility} highlightId="typeInfertility" />
+              <HighlightRow label="Menstrual History" value={patient.menstrualHistory} highlightId="menstrualHistory" />
+              <HighlightRow label="LMP" value={fmtDate(patient.lmp)} highlightId="lmp" />
+              <HighlightRow label="Obstetric History" value={patient.obstetricHistory} highlightId="obstetricHistory" />
+              <HighlightRow label="Past/Family History" value={patient.pastFamilyHistory} highlightId="pastFamilyHistory" />
             </dl>
           </Card>
           <Card className="p-5">
             <SectionTitle icon={Stethoscope}>Examination (Wife)</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm mb-4">
               {EXAM_FIELDS.map(([k, label]) => (
-                <FlagRow key={k} label={label} value={patient.exam[k]} flagId={`exam.${k}`} flagged={pendingFlags.includes(`exam.${k}`)} onToggle={toggleFlag} />
+                <HighlightRow key={k} label={label} value={patient.exam[k]} highlightId={`exam.${k}`} />
               ))}
             </dl>
             <SectionTitle icon={TestTube2}>Investigations (Wife)</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm mb-4">
               {INVEST_FIELDS.map(([k, label]) => (
-                <FlagRow key={k} label={label} value={patient.invest[k]} flagId={`invest.${k}`} flagged={pendingFlags.includes(`invest.${k}`)} onToggle={toggleFlag} />
+                <HighlightRow key={k} label={label} value={patient.invest[k]} highlightId={`invest.${k}`} />
               ))}
             </dl>
             <SectionTitle icon={TestTube2} sub="Husband">Investigations (Husband)</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm">
               {INVEST_FIELDS_HUSBAND.map(([k, label]) => (
-                <FlagRow key={k} label={label} value={patient.husband.invest[k]} flagId={`husbandInvest.${k}`} flagged={pendingFlags.includes(`husbandInvest.${k}`)} onToggle={toggleFlag} />
+                <HighlightRow key={k} label={label} value={patient.husband.invest[k]} highlightId={`husband.invest.${k}`} />
               ))}
             </dl>
           </Card>
@@ -1725,22 +1849,10 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
             <SectionTitle icon={ClipboardList}>Diagnosis & Plan</SectionTitle>
             <div className="grid sm:grid-cols-2 gap-4 text-sm mb-5">
               <div>
-                <p className="text-xs mb-1 flex items-center gap-1.5" style={{ color: C.inkFaint }}>
-                  Diagnosis
-                  <button type="button" className="no-print" onClick={() => toggleFlag("diagnosis")} title={pendingFlags.includes("diagnosis") ? "Unhighlight" : "Highlight for next visit"}>
-                    <Star size={12} style={{ color: pendingFlags.includes("diagnosis") ? C.gold : C.inkFaint }} fill={pendingFlags.includes("diagnosis") ? C.gold : "none"} />
-                  </button>
-                </p>
-                <p style={{ color: pendingFlags.includes("diagnosis") ? C.gold : C.ink, fontWeight: pendingFlags.includes("diagnosis") ? 600 : 400 }}>{patient.diagnosis || "—"}</p>
+                <HighlightRow label="Diagnosis" value={patient.diagnosis} highlightId="diagnosis" />
               </div>
               <div>
-                <p className="text-xs mb-1 flex items-center gap-1.5" style={{ color: C.inkFaint }}>
-                  Plan of Management
-                  <button type="button" className="no-print" onClick={() => toggleFlag("planOfManagement")} title={pendingFlags.includes("planOfManagement") ? "Unhighlight" : "Highlight for next visit"}>
-                    <Star size={12} style={{ color: pendingFlags.includes("planOfManagement") ? C.gold : C.inkFaint }} fill={pendingFlags.includes("planOfManagement") ? C.gold : "none"} />
-                  </button>
-                </p>
-                <p style={{ color: pendingFlags.includes("planOfManagement") ? C.gold : C.ink, fontWeight: pendingFlags.includes("planOfManagement") ? 600 : 400 }}>{patient.planOfManagement || "—"}</p>
+                <HighlightRow label="Plan of Management" value={patient.planOfManagement} highlightId="planOfManagement" />
               </div>
               <div><p className="text-xs mb-1" style={{ color: C.inkFaint }}>Next Follow-up</p><p style={{ color: C.ink }}>{fmtDate(patient.nextFollowUp)}</p></div>
             </div>
@@ -1794,11 +1906,16 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
           <Card className="p-5">
             <SectionTitle sub="Procedures">Laparoscopy · HSG · Hysteroscopy · PCR · CBNAAT</SectionTitle>
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
-              {[["Laparoscopy", patient.laparoscopy], ["HSG", patient.hsg], ["Hysteroscopy", patient.hysteroscopy]].map(([l, v]) => (
-                <div key={l}><p className="text-xs mb-1" style={{ color: C.inkFaint }}>{l}</p><p style={{ color: C.ink }}>{fmtDate(v.date)} — {v.findings || "—"}</p></div>
-              ))}
-              <div><p className="text-xs mb-1" style={{ color: C.inkFaint }}>PCR</p><p style={{ color: C.ink }}>{fmtDate(patient.pcr.date)} — {patient.pcr.result || "—"}</p></div>
-              <div><p className="text-xs mb-1" style={{ color: C.inkFaint }}>CBNAAT</p><p style={{ color: C.ink }}>{fmtDate(patient.cbnaat.date)} — {patient.cbnaat.result || "—"}</p></div>
+              {[["Laparoscopy", patient.laparoscopy, "findings", "laparoscopy.findings"], ["HSG", patient.hsg, "findings", "hsg.findings"], ["Hysteroscopy", patient.hysteroscopy, "findings", "hysteroscopy.findings"],
+              ["PCR", patient.pcr, "result", "pcr.result"], ["CBNAAT", patient.cbnaat, "result", "cbnaat.result"]].map(([l, v, key, hid]) => {
+                const h = pendingHighlights[hid];
+                return (
+                  <div key={l}>
+                    <p className="text-xs mb-1 flex items-center gap-1.5" style={{ color: C.inkFaint }}>{l}<HighlightDots id={hid} /></p>
+                    <p style={{ color: h ? HIGHLIGHT_COLORS[h].border : C.ink, fontWeight: h ? 600 : 400 }}>{fmtDate(v.date)} — {v[key] || "—"}</p>
+                  </div>
+                );
+              })}
             </div>
           </Card>
         </div>
@@ -1973,6 +2090,7 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
         </Card>
       )}
     </div>
+    </HighlightContext.Provider>
   );
 }
 
@@ -2421,8 +2539,8 @@ export default function App() {
     await persistPatients(next);
     showToast("File uploaded.");
   };
-  const saveFlags = async (patientId, flags) => {
-    const next = patients.map((p) => p.id === patientId ? { ...p, flags } : p);
+  const saveHighlights = async (patientId, highlights) => {
+    const next = patients.map((p) => p.id === patientId ? { ...p, highlights } : p);
     if (IS_WEB) {
       const changed = next.find((p) => p.id === patientId);
       try {
@@ -2483,7 +2601,7 @@ export default function App() {
             onAddSemen={(pid) => setSemenModalFor(pid)}
             onAddFile={addFile}
             onRemoveFile={removeFile}
-            onSaveFlags={saveFlags}
+            onSaveHighlights={saveHighlights}
           />
         )}
       </Shell>
