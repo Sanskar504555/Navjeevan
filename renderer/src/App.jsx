@@ -1709,9 +1709,15 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
               ))}
             </dl>
             <SectionTitle icon={TestTube2}>Investigations (Wife)</SectionTitle>
-            <dl className="grid grid-cols-2 gap-y-2 text-sm">
+            <dl className="grid grid-cols-2 gap-y-2 text-sm mb-4">
               {INVEST_FIELDS.map(([k, label]) => (
                 <FlagRow key={k} label={label} value={patient.invest[k]} flagId={`invest.${k}`} flagged={pendingFlags.includes(`invest.${k}`)} onToggle={toggleFlag} />
+              ))}
+            </dl>
+            <SectionTitle icon={TestTube2} sub="Husband">Investigations (Husband)</SectionTitle>
+            <dl className="grid grid-cols-2 gap-y-2 text-sm">
+              {INVEST_FIELDS_HUSBAND.map(([k, label]) => (
+                <FlagRow key={k} label={label} value={patient.husband.invest[k]} flagId={`husbandInvest.${k}`} flagged={pendingFlags.includes(`husbandInvest.${k}`)} onToggle={toggleFlag} />
               ))}
             </dl>
           </Card>
@@ -1761,14 +1767,6 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
                 <HormoneTable key={entry.id} title={`Hormone Assays — Table ${i + 1}`} panel={entry.panel} />
               ))}
             </div>
-          </Card>
-          <Card className="p-5">
-            <SectionTitle icon={TestTube2} sub="Husband">Investigations (Husband)</SectionTitle>
-            <dl className="grid grid-cols-2 gap-y-2 text-sm">
-              {INVEST_FIELDS_HUSBAND.map(([k, label]) => (
-                <FlagRow key={k} label={label} value={patient.husband.invest[k]} flagId={`husbandInvest.${k}`} flagged={pendingFlags.includes(`husbandInvest.${k}`)} onToggle={toggleFlag} />
-              ))}
-            </dl>
           </Card>
           <Card className="p-5">
             <div className="flex items-center justify-between mb-3">
