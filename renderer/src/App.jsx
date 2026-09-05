@@ -5,7 +5,7 @@ import {
   ChevronLeft, Pill, TestTube2, Baby, ClipboardList, Trash2, Pencil,
   ArrowLeft, AlertCircle, Clock, CheckCircle2, Menu, ShieldCheck,
   FlaskConical, Stethoscope, CalendarClock, Database,
-  IdCard, Upload, ImagePlus, FileText, Printer, Eye, Star
+  IdCard, Upload, ImagePlus, FileText, Printer, Eye, Star, Copy
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell
@@ -399,6 +399,21 @@ const INVEST_FIELDS = [
    wife-specific tests (Rubella, Pap Smear, APLA). Derived by filtering
    rather than duplicated, so the two never drift apart. */
 const INVEST_FIELDS_HUSBAND = INVEST_FIELDS.filter(([k]) => !["rubella", "papSmear", "apla"].includes(k));
+
+/* Groups consecutive medicine rows that share a drug name, so the same drug
+   prescribed at several doses (e.g. a tapering schedule) is shown/printed
+   once under its name instead of repeating it per dose — see the "Add
+   Another Dose" button in PrescriptionModal, which keeps same-drug rows
+   adjacent so they group correctly here. */
+function groupMedicines(medicines) {
+  const groups = [];
+  for (const m of medicines) {
+    const last = groups[groups.length - 1];
+    if (last && last.name === m.name) last.doses.push(m);
+    else groups.push({ name: m.name, doses: [m] });
+  }
+  return groups;
+}
 
 /* Every field a doctor can flag for the next visit (see patient.flags in
    blankPatient()) — one entry per exam/investigation row plus diagnosis and
@@ -1811,9 +1826,20 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
                     <button type="button" title="Delete" onClick={() => confirmDeleteRx(rx.id)}><Trash2 size={15} style={{ color: C.inkFaint }} /></button>
                   </div>
                 </div>
-                <ul className="text-sm flex flex-col gap-1">
-                  {rx.medicines.map((m) => (
-                    <li key={m.id} style={{ color: C.ink }}>• {m.name} — {m.dosage}, {m.frequency}{m.duration ? `, ${m.duration}` : ""} {m.instructions && <span style={{ color: C.inkFaint }}>({m.instructions})</span>}</li>
+                <ul className="text-sm flex flex-col gap-1.5">
+                  {groupMedicines(rx.medicines).map((g, gi) => (
+                    <li key={gi} style={{ color: C.ink }}>
+                      • <strong>{g.name}</strong>
+                      {g.doses.length === 1 ? (
+                        <> — {g.doses[0].dosage}, {g.doses[0].frequency}{g.doses[0].duration ? `, ${g.doses[0].duration}` : ""} {g.doses[0].instructions && <span style={{ color: C.inkFaint }}>({g.doses[0].instructions})</span>}</>
+                      ) : (
+                        <ul className="mt-0.5" style={{ paddingLeft: 16 }}>
+                          {g.doses.map((d) => (
+                            <li key={d.id}>– {d.dosage}, {d.frequency}{d.duration ? `, ${d.duration}` : ""} {d.instructions && <span style={{ color: C.inkFaint }}>({d.instructions})</span>}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
                   ))}
                 </ul>
                 {rx.advice && <p className="text-xs mt-2" style={{ color: C.inkMuted }}>Advice: {rx.advice}</p>}
@@ -1979,6 +2005,16 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
   const addMed = () => setMeds([...meds, { id: uid(), name: "", dosage: "", frequency: "", duration: "", instructions: "" }]);
   const updMed = (id, k, v) => setMeds(meds.map((m) => m.id === id ? { ...m, [k]: v } : m));
   const rmMed = (id) => setMeds(meds.filter((m) => m.id !== id));
+  // Same drug, another dose/duration (e.g. a tapering schedule) — carries
+  // the drug name over so the doctor doesn't have to pick it again, and
+  // inserts right after the source row so the two group together on the
+  // printed slip (see groupMedicines).
+  const dupMed = (id) => {
+    const idx = meds.findIndex((m) => m.id === id);
+    if (idx === -1) return;
+    const copy = { id: uid(), name: meds[idx].name, dosage: "", frequency: "", duration: "", instructions: "" };
+    setMeds([...meds.slice(0, idx + 1), copy, ...meds.slice(idx + 1)]);
+  };
 
   // Medicine names typed into this form (not yet saved) are folded into the
   // dropdown right away, so a custom drug typed for one row is immediately
@@ -2006,7 +2042,10 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
             <DropdownOtherField label="Duration" value={m.duration} onChange={(v) => updMed(m.id, "duration", v)} options={DURATION_OPTIONS} />
             <div className="flex gap-2 items-start">
               <TextField label="Instructions" value={m.instructions} onChange={(v) => updMed(m.id, "instructions", v)} />
-              <button onClick={() => rmMed(m.id)} className="pt-6"><Trash2 size={15} style={{ color: C.inkFaint }} /></button>
+              <button type="button" onClick={() => dupMed(m.id)} className="pt-6" title="Same drug, another dose/duration" disabled={!m.name}>
+                <Copy size={15} style={{ color: m.name ? C.inkFaint : "#C9D3CE" }} />
+              </button>
+              <button type="button" onClick={() => rmMed(m.id)} className="pt-6"><Trash2 size={15} style={{ color: C.inkFaint }} /></button>
             </div>
           </div>
         ))}
@@ -2040,12 +2079,13 @@ function PrescriptionView({ rx }) {
             </tr>
           </thead>
           <tbody>
-            {rx.medicines.map((m) => (
-              <tr key={m.id} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                <td className="py-1.5" style={{ color: C.ink }}>{m.name}</td><td className="py-1.5">{m.dosage || "—"}</td>
-                <td className="py-1.5">{m.frequency || "—"}</td><td className="py-1.5">{m.duration || "—"}</td><td className="py-1.5">{m.instructions || "—"}</td>
+            {groupMedicines(rx.medicines).map((g) => g.doses.map((d, di) => (
+              <tr key={d.id} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                {di === 0 && <td className="py-1.5 font-semibold align-top" rowSpan={g.doses.length} style={{ color: C.ink }}>{g.name}</td>}
+                <td className="py-1.5">{d.dosage || "—"}</td>
+                <td className="py-1.5">{d.frequency || "—"}</td><td className="py-1.5">{d.duration || "—"}</td><td className="py-1.5">{d.instructions || "—"}</td>
               </tr>
-            ))}
+            )))}
           </tbody>
         </table>
       </div>
