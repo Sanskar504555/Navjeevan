@@ -416,14 +416,17 @@ function groupMedicines(medicines) {
   return groups;
 }
 
+const SEMEN_COLUMNS = [["date", "Date"], ["lab", "Lab"], ["count", "Count"], ["motility", "Motility"], ["pusCells", "Pus Cells"]];
+
 /* Every read-only field in PatientDetail's Overview/Reports that can be
    highlighted, for the "Highlighted for Next Visit" summary card. Ids match
    the dot-paths PatientForm's set() uses for the same field (e.g.
    "exam.bmi", "husband.invest.hb"), so a highlight made while editing and
    one made while reviewing land on the exact same key — see
-   HighlightContext. Dynamic per-row tables (hormone panels, semen
-   analysis, cycle monitoring) aren't included; those don't fit a fixed
-   field id. */
+   HighlightContext. Semen analysis rows use their own stable row id
+   ("semen.<rowId>.<column>"). Hormone assay panels and cycle monitoring
+   aren't wired up yet — same mechanism would work there too, just not
+   requested/done so far. */
 function highlightableFields(patient) {
   return [
     { id: "refDoctor", label: "Ref. Doctor", value: patient.refDoctor },
@@ -454,6 +457,13 @@ function highlightableFields(patient) {
     { id: "hysteroscopy.findings", label: "Hysteroscopy", value: patient.hysteroscopy.findings },
     { id: "pcr.result", label: "PCR", value: patient.pcr.result },
     { id: "cbnaat.result", label: "CBNAAT", value: patient.cbnaat.result },
+    ...(patient.husband.semenAnalysis || []).flatMap((r, i) =>
+      SEMEN_COLUMNS.map(([key, label]) => ({
+        id: `semen.${r.id}.${key}`,
+        label: `Semen Analysis #${i + 1} — ${label}`,
+        value: key === "date" ? fmtDate(r[key]) : r[key],
+      }))
+    ),
   ];
 }
 
@@ -1631,11 +1641,11 @@ function PatientForm({ initial, onSave, onCancel }) {
                   <tbody>
                     {data.husband.semenAnalysis.map((r) => (
                       <tr key={r.id}>
-                        <td className="py-1 pr-2"><input type="date" value={r.date} onChange={(e) => updSemenRow(r.id, "date", e.target.value)} className="text-xs rounded px-2 py-1 outline-none" style={{ border: `1px solid ${C.border}` }} /></td>
-                        <td className="py-1 pr-2"><input value={r.lab} onChange={(e) => updSemenRow(r.id, "lab", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.border}` }} /></td>
-                        <td className="py-1 pr-2"><input value={r.count} onChange={(e) => updSemenRow(r.id, "count", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.border}` }} /></td>
-                        <td className="py-1 pr-2"><input value={r.motility} onChange={(e) => updSemenRow(r.id, "motility", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.border}` }} /></td>
-                        <td className="py-1 pr-2"><input value={r.pusCells} onChange={(e) => updSemenRow(r.id, "pusCells", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.border}` }} /></td>
+                        <td className="py-1 pr-2"><div className="flex items-center gap-1"><input type="date" value={r.date} onChange={(e) => updSemenRow(r.id, "date", e.target.value)} className="text-xs rounded px-2 py-1 outline-none" style={{ border: `1px solid ${C.border}` }} /><HighlightDots id={`semen.${r.id}.date`} /></div></td>
+                        <td className="py-1 pr-2"><div className="flex items-center gap-1"><input value={r.lab} onChange={(e) => updSemenRow(r.id, "lab", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.border}` }} /><HighlightDots id={`semen.${r.id}.lab`} /></div></td>
+                        <td className="py-1 pr-2"><div className="flex items-center gap-1"><input value={r.count} onChange={(e) => updSemenRow(r.id, "count", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.border}` }} /><HighlightDots id={`semen.${r.id}.count`} /></div></td>
+                        <td className="py-1 pr-2"><div className="flex items-center gap-1"><input value={r.motility} onChange={(e) => updSemenRow(r.id, "motility", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.border}` }} /><HighlightDots id={`semen.${r.id}.motility`} /></div></td>
+                        <td className="py-1 pr-2"><div className="flex items-center gap-1"><input value={r.pusCells} onChange={(e) => updSemenRow(r.id, "pusCells", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.border}` }} /><HighlightDots id={`semen.${r.id}.pusCells`} /></div></td>
                         <td><button onClick={() => rmSemenRow(r.id)}><Trash2 size={13} style={{ color: C.inkFaint }} /></button></td>
                       </tr>
                     ))}
@@ -1894,8 +1904,18 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
                 <tbody>
                   {patient.husband.semenAnalysis.map((r) => (
                     <tr key={r.id} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                      <td className="py-2">{fmtDate(r.date)}</td><td className="py-2">{r.lab || "—"}</td><td className="py-2">{r.count || "—"}</td>
-                      <td className="py-2">{r.motility || "—"}</td><td className="py-2">{r.pusCells || "—"}</td>
+                      {[["date", fmtDate(r.date)], ["lab", r.lab], ["count", r.count], ["motility", r.motility], ["pusCells", r.pusCells]].map(([key, val]) => {
+                        const hid = `semen.${r.id}.${key}`;
+                        const h = pendingHighlights[hid];
+                        return (
+                          <td key={key} className="py-2">
+                            <span className="inline-flex items-center gap-1.5" style={{ color: h ? HIGHLIGHT_COLORS[h].border : C.ink, fontWeight: h ? 600 : 400 }}>
+                              <span>{val || "—"}</span>
+                              <HighlightDots id={hid} />
+                            </span>
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                   {patient.husband.semenAnalysis.length === 0 && <tr><td colSpan={5} className="py-4 text-center" style={{ color: C.inkFaint }}>No reports yet.</td></tr>}
