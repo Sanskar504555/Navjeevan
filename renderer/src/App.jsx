@@ -19,6 +19,7 @@ const C = {
   card: "#FFFFFF",
   border: "#DEE5E1",
   borderSoft: "#EAEFEC",
+  borderStrong: "#8FA39A",
   ink: "#1E2B27",
   inkMuted: "#5E6E68",
   inkFaint: "#8A9791",
@@ -749,7 +750,7 @@ function TextAreaField({ label, value, onChange, rows = 2, full, highlightId }) 
 }
 function Card({ children, className = "", style = {} }) {
   return (
-    <div className={"rounded-2xl " + className} style={{ background: C.card, border: `1px solid ${C.border}`, ...style }}>
+    <div className={"rounded-2xl " + className} style={{ background: C.card, border: `2px solid ${C.borderStrong}`, ...style }}>
       {children}
     </div>
   );
