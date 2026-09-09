@@ -587,7 +587,7 @@ function TextField({ label, value, onChange, placeholder, type = "text", full, h
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         className="rounded-lg px-3 py-2 text-sm outline-none transition"
-        style={{ border: `1px solid ${C.border}`, color: C.ink, background: "#fff", ...highlightFieldStyle(h) }}
+        style={{ border: `1px solid ${C.borderStrong}`, color: C.ink, background: "#fff", ...highlightFieldStyle(h) }}
         onFocus={(e) => (e.target.style.borderColor = C.primary)}
         onBlur={(e) => (e.target.style.borderColor = h?.color ? C.brick : C.border)}
       />
@@ -603,7 +603,7 @@ function SelectField({ label, value, onChange, options, full, placeholder, highl
         value={value || ""}
         onChange={(e) => onChange(e.target.value)}
         className="rounded-lg px-3 py-2 text-sm outline-none"
-        style={{ border: `1px solid ${C.border}`, color: C.ink, background: "#fff", ...highlightFieldStyle(h) }}
+        style={{ border: `1px solid ${C.borderStrong}`, color: C.ink, background: "#fff", ...highlightFieldStyle(h) }}
       >
         {placeholder && !value && <option value="" disabled>{placeholder}</option>}
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
@@ -617,7 +617,7 @@ function TextFieldWithSuffix({ label, value, onChange, suffix, placeholder, high
   return (
     <label className="flex flex-col gap-1">
       <FieldLabel label={label} highlightId={highlightId} />
-      <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: `1px solid ${C.border}`, background: "#fff", ...highlightFieldStyle(h) }}>
+      <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff", ...highlightFieldStyle(h) }}>
         <input
           value={value || ""}
           placeholder={placeholder}
@@ -640,7 +640,7 @@ function ComputedField({ label, value, hint }) {
         readOnly
         value={value || "—"}
         className="rounded-lg px-3 py-2 text-sm outline-none"
-        style={{ border: `1px solid ${C.border}`, color: C.ink, background: C.slateTint, cursor: "not-allowed" }}
+        style={{ border: `1px solid ${C.borderStrong}`, color: C.ink, background: C.slateTint, cursor: "not-allowed" }}
       />
       {hint && <span className="text-[11px]" style={{ color: C.inkFaint }}>{hint}</span>}
     </label>
@@ -714,7 +714,7 @@ function DropdownOtherField({ label, value, onChange, options, full, highlightId
           else { setShowCustom(false); onChange(e.target.value); }
         }}
         className="rounded-lg px-3 py-2 text-sm outline-none"
-        style={{ border: `1px solid ${C.border}`, color: C.ink, background: "#fff", ...highlightFieldStyle(h) }}
+        style={{ border: `1px solid ${C.borderStrong}`, color: C.ink, background: "#fff", ...highlightFieldStyle(h) }}
       >
         <option value="">Select…</option>
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
@@ -743,7 +743,7 @@ function TextAreaField({ label, value, onChange, rows = 2, full, highlightId }) 
         value={value || ""}
         onChange={(e) => onChange(e.target.value)}
         className="rounded-lg px-3 py-2 text-sm outline-none resize-none"
-        style={{ border: `1px solid ${C.border}`, color: C.ink, background: "#fff", ...highlightFieldStyle(h) }}
+        style={{ border: `1px solid ${C.borderStrong}`, color: C.ink, background: "#fff", ...highlightFieldStyle(h) }}
       />
     </label>
   );
@@ -885,16 +885,16 @@ function HormoneTable({ title, panel, editable, onChange, onRemove }) {
                 <tr key={k} style={{ borderTop: `1px solid ${C.border}` }}>
                   {editable ? (
                     <>
-                      <td className="py-1 pr-2"><input type="date" value={row.date} onChange={(e) => onChange(k, "date", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.border}`, background: "#fff" }} /></td>
+                      <td className="py-1 pr-2"><input type="date" value={row.date} onChange={(e) => onChange(k, "date", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
                       <td className="py-1 pr-2 font-medium" style={{ color: C.ink }}>{label}</td>
-                      <td className="py-1 pr-2"><input value={row.day} onChange={(e) => onChange(k, "day", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.border}`, background: "#fff" }} /></td>
+                      <td className="py-1 pr-2"><input value={row.day} onChange={(e) => onChange(k, "day", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
                       <td className="py-1 pr-2">
                         <div className="flex items-center gap-1">
-                          <input value={row.result} onChange={(e) => onChange(k, "result", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.border}`, background: "#fff" }} />
+                          <input value={row.result} onChange={(e) => onChange(k, "result", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} />
                           <span className="text-[10px] whitespace-nowrap" style={{ color: C.inkFaint }}>{unit}</span>
                         </div>
                       </td>
-                      <td className="py-1 pr-2"><input value={row.lab} onChange={(e) => onChange(k, "lab", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.border}`, background: "#fff" }} /></td>
+                      <td className="py-1 pr-2"><input value={row.lab} onChange={(e) => onChange(k, "lab", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
                     </>
                   ) : (
                     <>
@@ -927,7 +927,7 @@ function CycleTable({ label, cycle, editable, onDateChange, onAddRow, onRemoveRo
         {editable ? (
           <div className="flex items-center gap-2">
             <span className="text-xs" style={{ color: C.inkFaint }}>Date</span>
-            <input type="date" value={cycle.date} onChange={(e) => onDateChange(e.target.value)} className="text-xs rounded px-2 py-1 outline-none" style={{ border: `1px solid ${C.border}`, background: "#fff" }} />
+            <input type="date" value={cycle.date} onChange={(e) => onDateChange(e.target.value)} className="text-xs rounded px-2 py-1 outline-none" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} />
           </div>
         ) : (
           <span className="text-xs" style={{ color: C.inkFaint }}>Date: {fmtDate(cycle.date)}</span>
@@ -948,13 +948,13 @@ function CycleTable({ label, cycle, editable, onDateChange, onAddRow, onRemoveRo
               <tr key={r.id} style={{ borderTop: `1px solid ${C.border}` }}>
                 {editable ? (
                   <>
-                    <td className="py-1 pr-1"><input type="date" value={r.date} onChange={(e) => onUpdateRow(r.id, "date", e.target.value)} className="text-xs rounded px-1.5 py-1 outline-none w-full" style={{ border: `1px solid ${C.border}`, background: "#fff" }} /></td>
-                    <td className="py-1 pr-1"><input value={r.day} onChange={(e) => onUpdateRow(r.id, "day", e.target.value)} className="text-xs rounded px-1.5 py-1 outline-none w-14" style={{ border: `1px solid ${C.border}`, background: "#fff" }} /></td>
-                    <td className="py-1 pr-1"><input value={r.e2} onChange={(e) => onUpdateRow(r.id, "e2", e.target.value)} className="text-xs rounded px-1.5 py-1 outline-none w-16" style={{ border: `1px solid ${C.border}`, background: "#fff" }} /></td>
-                    <td className="py-1 pr-1"><input value={r.end} onChange={(e) => onUpdateRow(r.id, "end", e.target.value)} className="text-xs rounded px-1.5 py-1 outline-none w-16" style={{ border: `1px solid ${C.border}`, background: "#fff" }} /></td>
-                    <td className="py-1 pr-1"><input value={r.rtOv} onChange={(e) => onUpdateRow(r.id, "rtOv", e.target.value)} className="text-xs rounded px-1.5 py-1 outline-none w-16" style={{ border: `1px solid ${C.border}`, background: "#fff" }} /></td>
-                    <td className="py-1 pr-1"><input value={r.ltOv} onChange={(e) => onUpdateRow(r.id, "ltOv", e.target.value)} className="text-xs rounded px-1.5 py-1 outline-none w-16" style={{ border: `1px solid ${C.border}`, background: "#fff" }} /></td>
-                    <td className="py-1 pr-1"><input value={r.adv} onChange={(e) => onUpdateRow(r.id, "adv", e.target.value)} className="text-xs rounded px-1.5 py-1 outline-none w-full" style={{ border: `1px solid ${C.border}`, background: "#fff" }} /></td>
+                    <td className="py-1 pr-1"><input type="date" value={r.date} onChange={(e) => onUpdateRow(r.id, "date", e.target.value)} className="text-xs rounded px-1.5 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
+                    <td className="py-1 pr-1"><input value={r.day} onChange={(e) => onUpdateRow(r.id, "day", e.target.value)} className="text-xs rounded px-1.5 py-1 outline-none w-14" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
+                    <td className="py-1 pr-1"><input value={r.e2} onChange={(e) => onUpdateRow(r.id, "e2", e.target.value)} className="text-xs rounded px-1.5 py-1 outline-none w-16" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
+                    <td className="py-1 pr-1"><input value={r.end} onChange={(e) => onUpdateRow(r.id, "end", e.target.value)} className="text-xs rounded px-1.5 py-1 outline-none w-16" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
+                    <td className="py-1 pr-1"><input value={r.rtOv} onChange={(e) => onUpdateRow(r.id, "rtOv", e.target.value)} className="text-xs rounded px-1.5 py-1 outline-none w-16" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
+                    <td className="py-1 pr-1"><input value={r.ltOv} onChange={(e) => onUpdateRow(r.id, "ltOv", e.target.value)} className="text-xs rounded px-1.5 py-1 outline-none w-16" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
+                    <td className="py-1 pr-1"><input value={r.adv} onChange={(e) => onUpdateRow(r.id, "adv", e.target.value)} className="text-xs rounded px-1.5 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
                     <td><button onClick={() => onRemoveRow(r.id)}><Trash2 size={13} style={{ color: C.inkFaint }} /></button></td>
                   </>
                 ) : (
@@ -1332,12 +1332,12 @@ function PatientsList({ patients, openPatient, setView, deletePatient }) {
       </div>
       <Card className="p-4">
         <div className="flex flex-wrap gap-3 mb-4">
-          <div className="flex items-center gap-2 rounded-lg px-3 py-2 flex-1 min-w-[200px]" style={{ border: `1px solid ${C.border}` }}>
+          <div className="flex items-center gap-2 rounded-lg px-3 py-2 flex-1 min-w-[200px]" style={{ border: `1px solid ${C.borderStrong}` }}>
             <Search size={15} style={{ color: C.inkFaint }} />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name or file no."
               className="text-sm outline-none flex-1" style={{ color: C.ink }} />
           </div>
-          <select value={tFilter} onChange={(e) => setTFilter(e.target.value)} className="rounded-lg px-3 py-2 text-sm" style={{ border: `1px solid ${C.border}`, color: C.ink }}>
+          <select value={tFilter} onChange={(e) => setTFilter(e.target.value)} className="rounded-lg px-3 py-2 text-sm" style={{ border: `1px solid ${C.borderStrong}`, color: C.ink }}>
             {["All", "IUI", "IVF", "Optimization", "Other"].map((o) => <option key={o}>{o}</option>)}
           </select>
         </div>
@@ -1650,11 +1650,11 @@ function PatientForm({ initial, onSave, onCancel }) {
                   <tbody>
                     {data.husband.semenAnalysis.map((r) => (
                       <tr key={r.id}>
-                        <td className="py-1 pr-2"><div className="flex items-center gap-1"><input type="date" value={r.date} onChange={(e) => updSemenRow(r.id, "date", e.target.value)} className="text-xs rounded px-2 py-1 outline-none" style={{ border: `1px solid ${C.border}` }} /><HighlightDots id={`semen.${r.id}.date`} /></div></td>
-                        <td className="py-1 pr-2"><div className="flex items-center gap-1"><input value={r.lab} onChange={(e) => updSemenRow(r.id, "lab", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.border}` }} /><HighlightDots id={`semen.${r.id}.lab`} /></div></td>
-                        <td className="py-1 pr-2"><div className="flex items-center gap-1"><input value={r.count} onChange={(e) => updSemenRow(r.id, "count", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.border}` }} /><HighlightDots id={`semen.${r.id}.count`} /></div></td>
-                        <td className="py-1 pr-2"><div className="flex items-center gap-1"><input value={r.motility} onChange={(e) => updSemenRow(r.id, "motility", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.border}` }} /><HighlightDots id={`semen.${r.id}.motility`} /></div></td>
-                        <td className="py-1 pr-2"><div className="flex items-center gap-1"><input value={r.pusCells} onChange={(e) => updSemenRow(r.id, "pusCells", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.border}` }} /><HighlightDots id={`semen.${r.id}.pusCells`} /></div></td>
+                        <td className="py-1 pr-2"><div className="flex items-center gap-1"><input type="date" value={r.date} onChange={(e) => updSemenRow(r.id, "date", e.target.value)} className="text-xs rounded px-2 py-1 outline-none" style={{ border: `1px solid ${C.borderStrong}` }} /><HighlightDots id={`semen.${r.id}.date`} /></div></td>
+                        <td className="py-1 pr-2"><div className="flex items-center gap-1"><input value={r.lab} onChange={(e) => updSemenRow(r.id, "lab", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.borderStrong}` }} /><HighlightDots id={`semen.${r.id}.lab`} /></div></td>
+                        <td className="py-1 pr-2"><div className="flex items-center gap-1"><input value={r.count} onChange={(e) => updSemenRow(r.id, "count", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.borderStrong}` }} /><HighlightDots id={`semen.${r.id}.count`} /></div></td>
+                        <td className="py-1 pr-2"><div className="flex items-center gap-1"><input value={r.motility} onChange={(e) => updSemenRow(r.id, "motility", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.borderStrong}` }} /><HighlightDots id={`semen.${r.id}.motility`} /></div></td>
+                        <td className="py-1 pr-2"><div className="flex items-center gap-1"><input value={r.pusCells} onChange={(e) => updSemenRow(r.id, "pusCells", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-24" style={{ border: `1px solid ${C.borderStrong}` }} /><HighlightDots id={`semen.${r.id}.pusCells`} /></div></td>
                         <td><button onClick={() => rmSemenRow(r.id)}><Trash2 size={13} style={{ color: C.inkFaint }} /></button></td>
                       </tr>
                     ))}
