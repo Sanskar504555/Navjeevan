@@ -511,57 +511,45 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB per file
 const FILE_ACCEPT = ".doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/jpeg,image/png,application/pdf";
 
 /* ---------------------------------------------------------------------
-   Field highlighting — any field can be marked yellow/red by whoever's
-   using the form or reviewing the record, so it stands out for the next
-   visit. A single HighlightContext (provided by PatientForm when editing,
-   and by PatientDetail when reviewing) holds the current {fieldId: color}
-   map plus a toggle function; every field primitive below reads it via
-   useHighlight(highlightId) and renders the same two dots. Field ids are
-   the same dot-paths already used by PatientForm's set(path, val) (e.g.
-   "exam.bmi", "husband.invest.hb", "diagnosis"), so a highlight set while
-   editing shows up identically when just reviewing the record, and
-   vice versa.
---------------------------------------------------------------------- */
+   Field highlighting — any field can be marked as important by whoever's
+   using the form or reviewing the record, so it stands out (bold, red)
+   for the next visit. A single HighlightContext (provided by PatientForm
+   when editing, and by PatientDetail when reviewing) holds the current
+   {fieldId: "red"} map plus a toggle function; every field primitive below
+   reads it via useHighlight(highlightId) and renders the same single dot.
+   Field ids are the same dot-paths already used by PatientForm's
+   set(path, val) (e.g. "exam.bmi", "husband.invest.hb", "diagnosis"), so a
+   highlight set while editing shows up identically when just reviewing the
+   record, and vice versa. */
 const HighlightContext = createContext(null);
 function useHighlight(id) {
   const ctx = useContext(HighlightContext);
   if (!ctx || !id) return null;
   return { color: ctx.highlights[id] || null, toggle: (color) => ctx.onToggle(id, color) };
 }
-const HIGHLIGHT_COLORS = {
-  yellow: { dot: C.gold, bg: C.goldTint, border: C.gold },
-  red: { dot: C.brick, bg: C.brickTint, border: C.brick },
-};
 function highlightFieldStyle(h) {
   if (!h?.color) return {};
-  const c = HIGHLIGHT_COLORS[h.color];
-  return { border: `2px solid ${c.border}`, background: c.bg };
+  return { border: `2px solid ${C.brick}`, background: C.brickTint };
 }
-/* The two small toggle dots shown next to a highlightable field's label.
-   Click a color to mark the field that color; click the same color again
-   to clear it. Renders nothing if this field isn't wired to a highlight
-   context (highlightId omitted) or there's no context (e.g. read-only
-   pages that don't support highlighting). */
+/* The single toggle dot shown next to a highlightable field's label —
+   click to highlight it red, click again to clear. Renders nothing if
+   this field isn't wired to a highlight context (highlightId omitted) or
+   there's no context (e.g. a page that doesn't support highlighting). */
 function HighlightDots({ id }) {
   const h = useHighlight(id);
   if (!h) return null;
   return (
-    <span className="inline-flex items-center gap-1 no-print shrink-0">
-      {["yellow", "red"].map((c) => (
-        <button
-          key={c}
-          type="button"
-          title={`Highlight ${c}${h.color === c ? " (click to clear)" : ""}`}
-          onClick={() => h.toggle(h.color === c ? null : c)}
-          style={{
-            width: 10, height: 10, borderRadius: 999, padding: 0, cursor: "pointer",
-            background: HIGHLIGHT_COLORS[c].dot,
-            border: h.color === c ? `2px solid ${HIGHLIGHT_COLORS[c].border}` : "1px solid rgba(0,0,0,0.15)",
-            boxShadow: h.color === c ? `0 0 0 1px #fff inset` : "none",
-          }}
-        />
-      ))}
-    </span>
+    <button
+      type="button"
+      className="no-print shrink-0"
+      title={h.color ? "Remove highlight" : "Highlight this field"}
+      onClick={() => h.toggle(h.color ? null : "red")}
+      style={{
+        width: 10, height: 10, borderRadius: 999, padding: 0, cursor: "pointer",
+        background: h.color ? C.brick : "#fff",
+        border: `1.5px solid ${C.brick}`,
+      }}
+    />
   );
 }
 function FieldLabel({ label, highlightId }) {
@@ -588,7 +576,7 @@ function TextField({ label, value, onChange, placeholder, type = "text", full, h
         className="rounded-lg px-3 py-2 text-sm outline-none transition"
         style={{ border: `1px solid ${C.border}`, color: C.ink, background: "#fff", ...highlightFieldStyle(h) }}
         onFocus={(e) => (e.target.style.borderColor = C.primary)}
-        onBlur={(e) => (e.target.style.borderColor = h?.color ? HIGHLIGHT_COLORS[h.color].border : C.border)}
+        onBlur={(e) => (e.target.style.borderColor = h?.color ? C.brick : C.border)}
       />
     </label>
   );
@@ -849,7 +837,7 @@ function HighlightRow({ label, value, highlightId }) {
   return (
     <Fragment>
       <dt style={{ color: C.inkFaint }}>{label}</dt>
-      <dd className="flex items-center gap-1.5" style={{ color: h?.color ? HIGHLIGHT_COLORS[h.color].border : C.ink, fontWeight: h?.color ? 600 : 400 }}>
+      <dd className="flex items-center gap-1.5" style={{ color: h?.color ? C.brick : C.ink, fontWeight: h?.color ? 600 : 400 }}>
         <span>{value || "—"}</span>
         <HighlightDots id={highlightId} />
       </dd>
@@ -1782,14 +1770,14 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
       </div>
 
       {highlightedItems.length > 0 && (
-        <Card className="p-4" style={{ background: C.goldTint, border: `1px solid ${C.gold}` }}>
+        <Card className="p-4" style={{ background: C.brickTint, border: `1px solid ${C.brick}` }}>
           <div className="flex items-center gap-2 mb-2">
-            <Star size={15} style={{ color: C.gold }} fill={C.gold} />
+            <Star size={15} style={{ color: C.brick }} fill={C.brick} />
             <p className="text-sm font-semibold" style={{ color: C.primaryDark }}>Highlighted for Next Visit</p>
           </div>
           <ul className="text-sm flex flex-col gap-1">
             {highlightedItems.map((f) => (
-              <li key={f.id} style={{ color: HIGHLIGHT_COLORS[f.color].border }}>• <strong>{f.label}:</strong> {f.value}</li>
+              <li key={f.id} style={{ color: C.brick, fontWeight: 600 }}>• <strong>{f.label}:</strong> {f.value}</li>
             ))}
           </ul>
         </Card>
@@ -1909,7 +1897,7 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
                         const h = pendingHighlights[hid];
                         return (
                           <td key={key} className="py-2">
-                            <span className="inline-flex items-center gap-1.5" style={{ color: h ? HIGHLIGHT_COLORS[h].border : C.ink, fontWeight: h ? 600 : 400 }}>
+                            <span className="inline-flex items-center gap-1.5" style={{ color: h ? C.brick : C.ink, fontWeight: h ? 600 : 400 }}>
                               <span>{val || "—"}</span>
                               <HighlightDots id={hid} />
                             </span>
@@ -1932,7 +1920,7 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
                 return (
                   <div key={l}>
                     <p className="text-xs mb-1 flex items-center gap-1.5" style={{ color: C.inkFaint }}>{l}<HighlightDots id={hid} /></p>
-                    <p style={{ color: h ? HIGHLIGHT_COLORS[h].border : C.ink, fontWeight: h ? 600 : 400 }}>{fmtDate(v.date)} — {v[key] || "—"}</p>
+                    <p style={{ color: h ? C.brick : C.ink, fontWeight: h ? 600 : 400 }}>{fmtDate(v.date)} — {v[key] || "—"}</p>
                   </div>
                 );
               })}
