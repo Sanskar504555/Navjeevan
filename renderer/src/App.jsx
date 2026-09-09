@@ -223,6 +223,18 @@ async function deletePrescriptionRemote(id) {
   await apiFetch(`/api/prescriptions/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
+async function loadBackupsRemote() {
+  const body = await apiFetch("/api/backups");
+  return Array.isArray(body?.backups) ? body.backups : [];
+}
+async function createBackupRemote() {
+  const body = await apiFetch("/api/backups", { method: "POST" });
+  return body?.backup;
+}
+async function restoreBackupRemote(id) {
+  return apiFetch(`/api/backups/${encodeURIComponent(id)}`, { method: "POST" });
+}
+
 /* ---------------------------------------------------------------------
    Blank templates
 --------------------------------------------------------------------- */
@@ -1135,25 +1147,33 @@ function ChangePasswordModal({  onClose, onSave }) {
 }
 
 function BackupsModal({ onClose, backups, onRun, onRestore, onOpenFolder, busy }) {
+  const isWeb = !onOpenFolder;
   return (
     <ModalShell title="Backups" onClose={onClose} wide>
       <p className="text-sm mb-4" style={{ color: C.inkMuted }}>
-        A snapshot is taken automatically on launch, every 6 hours while the app is open, and on close.
-        The last {backups.length ? "30" : "0"} snapshots are kept. Copy the backups folder to a USB drive
-        or cloud-synced folder periodically for off-site protection.
+        {isWeb
+          ? `Click "Back Up Now" to save a full snapshot of every patient and prescription. The last 30 are kept — restoring one replaces all current data with that snapshot.`
+          : "A snapshot is taken automatically on launch, every 6 hours while the app is open, and on close. The last 30 snapshots are kept. Copy the backups folder to a USB drive or cloud-synced folder periodically for off-site protection."}
       </p>
       <div className="flex gap-2 mb-4">
         <Btn size="sm" icon={Save} onClick={onRun} disabled={busy}>{busy ? "Backing up…" : "Back Up Now"}</Btn>
-        <Btn size="sm" variant="ghost" onClick={onOpenFolder}>Open Backups Folder</Btn>
+        {onOpenFolder && <Btn size="sm" variant="ghost" onClick={onOpenFolder}>Open Backups Folder</Btn>}
       </div>
       <div className="max-h-72 overflow-y-auto emr-scroll flex flex-col gap-2">
         {backups.length === 0 && <p className="text-sm" style={{ color: C.inkFaint }}>No backups yet.</p>}
-        {backups.map((b) => (
-          <div key={b} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: C.slateTint }}>
-            <span className="text-sm" style={{ color: C.ink }}>{b.replace("_", " · ").replace(/-/g, (m, i) => m)}</span>
-            <Btn size="sm" variant="ghost" onClick={() => onRestore(b)}>Restore</Btn>
-          </div>
-        ))}
+        {isWeb
+          ? backups.map((b) => (
+            <div key={b.id} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: C.slateTint }}>
+              <span className="text-sm" style={{ color: C.ink }}>{new Date(b.createdAt).toLocaleString("en-IN")} · {b.patientCount} patient{b.patientCount === 1 ? "" : "s"}</span>
+              <Btn size="sm" variant="ghost" onClick={() => onRestore(b)}>Restore</Btn>
+            </div>
+          ))
+          : backups.map((b) => (
+            <div key={b} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: C.slateTint }}>
+              <span className="text-sm" style={{ color: C.ink }}>{b.replace("_", " · ").replace(/-/g, (m) => m)}</span>
+              <Btn size="sm" variant="ghost" onClick={() => onRestore(b)}>Restore</Btn>
+            </div>
+          ))}
       </div>
       <div className="flex justify-end mt-5">
         <Btn variant="ghost" onClick={onClose}>Close</Btn>
@@ -2423,18 +2443,33 @@ export default function App() {
   }
 };
 
-  const refreshBackups = async () => setBackupsList(await window.api.backupList());
-  const openBackups = async () => { await refreshBackups(); setBackupsOpen(true); };
+  const refreshBackups = async () => setBackupsList(IS_WEB ? await loadBackupsRemote() : await window.api.backupList());
+  const openBackups = async () => {
+    try {
+      await refreshBackups();
+      setBackupsOpen(true);
+    } catch (error) {
+      showToast(error.message || "Could not load backups.", "error");
+    }
+  };
   const runBackupNow = async () => {
     setBackupBusy(true);
-    await window.api.backupRun();
-    await refreshBackups();
-    setBackupBusy(false);
-    showToast("Backup complete.");
+    try {
+      if (IS_WEB) await createBackupRemote();
+      else await window.api.backupRun();
+      await refreshBackups();
+      showToast("Backup complete.");
+    } catch (error) {
+      showToast(error.message || "Backup failed.", "error");
+    } finally {
+      setBackupBusy(false);
+    }
   };
-  const restoreBackup = async (snapshotName) => {
-    if (!window.confirm(`Restore "${snapshotName}"? Any changes made after this backup will be lost.`)) return;
-    await window.api.backupRestore(snapshotName);
+  const restoreBackup = async (snapshot) => {
+    const label = IS_WEB ? new Date(snapshot.createdAt).toLocaleString("en-IN") : snapshot;
+    if (!window.confirm(`Restore the backup from ${label}? Any changes made after this backup will be lost.`)) return;
+    if (IS_WEB) await restoreBackupRemote(snapshot.id);
+    else await window.api.backupRestore(snapshot);
     showToast("Backup restored. Reloading…");
     setTimeout(() => window.location.reload(), 800);
   };
@@ -2623,7 +2658,7 @@ export default function App() {
 /> }
       {backupsOpen && (
         <BackupsModal onClose={() => setBackupsOpen(false)} backups={backupsList} onRun={runBackupNow} onRestore={restoreBackup}
-          onOpenFolder={() => window.api.backupOpenFolder()} busy={backupBusy} />
+          onOpenFolder={IS_WEB ? undefined : () => window.api.backupOpenFolder()} busy={backupBusy} />
       )}
       <Toast toast={toast} />
     </div>

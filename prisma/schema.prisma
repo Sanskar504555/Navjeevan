@@ -101,3 +101,14 @@ model SyncLog {
 
   @@map("sync_logs")
 }
+
+model Backup {
+  id        String   @id @default(uuid())
+  // Full point-in-time snapshot: { patients: [...patient.data], prescriptions: [...prescription.data] }.
+  // The web equivalent of the desktop app's local SQLite file snapshots —
+  // see api/backups. Pruned to the most recent 30 on every new backup.
+  data      Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("backups")
+}
