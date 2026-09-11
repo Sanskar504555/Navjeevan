@@ -1673,7 +1673,7 @@ function PatientForm({ initial, onSave, onCancel }) {
             <div className="grid sm:grid-cols-2 gap-4">
               <TextAreaField label="Diagnosis" value={data.diagnosis} onChange={(v) => set("diagnosis", v)} full rows={3} highlightId="diagnosis" />
               <TextAreaField label="Plan of Management" value={data.planOfManagement} onChange={(v) => set("planOfManagement", v)} full rows={3} highlightId="planOfManagement" />
-              <SelectField label="Treatment Suggested" value={data.treatmentType} onChange={(v) => set("treatmentType", v)} options={["Optimization", "IUI", "IVF", "Other"]} highlightId="treatmentType" />
+              <DropdownOtherField label="Treatment Suggested" value={data.treatmentType} onChange={(v) => set("treatmentType", v)} options={["Optimization", "IUI", "IVF"]} highlightId="treatmentType" />
               <SelectField label="Status" value={data.status} onChange={(v) => set("status", v)} options={["Active", "Follow-up", "Completed", "Discontinued"]} highlightId="status" />
               <TextField label="Next Follow-up Date" type="date" value={data.nextFollowUp} onChange={(v) => set("nextFollowUp", v)} highlightId="nextFollowUp" />
             </div>
@@ -2429,10 +2429,14 @@ export default function App() {
   };
   const handleChangePassword = async (current, next) => {
   try {
-    const result = await window.api.changePassword(current, next);
-
-    if (!result) {
-      return false;
+    if (IS_WEB) {
+      await apiFetch("/api/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({ currentPassword: current, newPassword: next }),
+      });
+    } else {
+      const result = await window.api.changePassword(current, next);
+      if (!result) return false;
     }
 
     showToast("Password updated.");
