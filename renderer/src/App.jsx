@@ -436,10 +436,10 @@ const SEMEN_COLUMNS = [["date", "Date"], ["lab", "Lab"], ["count", "Count"], ["m
    the dot-paths PatientForm's set() uses for the same field (e.g.
    "exam.bmi", "husband.invest.hb"), so a highlight made while editing and
    one made while reviewing land on the exact same key — see
-   HighlightContext. Semen analysis rows use their own stable row id
-   ("semen.<rowId>.<column>"). Hormone assay panels and cycle monitoring
-   aren't wired up yet — same mechanism would work there too, just not
-   requested/done so far. */
+   HighlightContext. Semen analysis rows and hormone assay panels use their
+   own stable row/panel id ("semen.<rowId>.<column>",
+   "hormone.<panelId>.<hormoneKey>"). Cycle monitoring isn't wired up yet —
+   same mechanism would work there too, just not requested/done so far. */
 function highlightableFields(patient) {
   return [
     { id: "refDoctor", label: "Ref. Doctor", value: patient.refDoctor },
@@ -475,6 +475,13 @@ function highlightableFields(patient) {
         id: `semen.${r.id}.${key}`,
         label: `Semen Analysis #${i + 1} — ${label}`,
         value: key === "date" ? fmtDate(r[key]) : r[key],
+      }))
+    ),
+    ...(patient.hormonePanels || []).flatMap((entry, i) =>
+      HORMONE_KEYS.map(([k, label, unit]) => ({
+        id: `hormone.${entry.id}.${k}`,
+        label: `Hormone Assays #${i + 1} — ${label}`,
+        value: entry.panel[k]?.result ? `${entry.panel[k].result} ${unit}` : "",
       }))
     ),
   ];
@@ -858,9 +865,20 @@ function HighlightRow({ label, value, highlightId }) {
   );
 }
 
+function HormoneResultCell({ result, unit, highlightId }) {
+  const h = useHighlight(highlightId);
+  return (
+    <span className="inline-flex items-center gap-1.5" style={{ color: h?.color ? C.brick : C.ink, fontWeight: h?.color ? 600 : 400 }}>
+      <span>{result ? `${result} ${unit}` : "—"}</span>
+      <HighlightDots id={highlightId} />
+    </span>
+  );
+}
 /* Hormone panel table — mirrors the paper's "Hormone Assays" / "Recepit" tables
-   (one row per Serum marker, each with its own Date / Day of Cycle / Result / Lab). */
-function HormoneTable({ title, panel, editable, onChange, onRemove }) {
+   (one row per Serum marker, each with its own Date / Day of Cycle / Result / Lab).
+   panelId (the read-only hormonePanels entry's own id) enables per-result
+   highlighting — omitted in editable/form mode. */
+function HormoneTable({ title, panel, panelId, editable, onChange, onRemove }) {
   return (
     <div className="rounded-xl p-3" style={{ background: C.slateTint }}>
       <div className="flex items-center justify-between mb-2">
@@ -901,7 +919,9 @@ function HormoneTable({ title, panel, editable, onChange, onRemove }) {
                       <td className="py-2">{fmtDate(row.date)}</td>
                       <td className="py-2 font-medium" style={{ color: C.ink }}>{label}</td>
                       <td className="py-2">{row.day || "—"}</td>
-                      <td className="py-2">{row.result ? `${row.result} ${unit}` : "—"}</td>
+                      <td className="py-2">
+                        {panelId ? <HormoneResultCell result={row.result} unit={unit} highlightId={`hormone.${panelId}.${k}`} /> : (row.result ? `${row.result} ${unit}` : "—")}
+                      </td>
                       <td className="py-2">{row.lab || "—"}</td>
                     </>
                   )}
@@ -1882,24 +1902,18 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
               ))}
             </div>
           </Card>
-          </div>
-        </div>
-      )}
-
-      {tab === "reports" && (
-        <div className="flex flex-col gap-5">
-          <Card className="p-5">
+          <Card className="p-5 lg:col-span-2">
             <div className="flex items-center justify-between mb-3">
               <SectionTitle icon={FlaskConical} sub="Blood / hormone reports — as on the OPD chart">Hormone Assays</SectionTitle>
               <Btn size="sm" variant="ghost" icon={Pencil} onClick={onEdit}>Edit Reports</Btn>
             </div>
             <div className="flex flex-col gap-4">
               {patient.hormonePanels.map((entry, i) => (
-                <HormoneTable key={entry.id} title={`Hormone Assays — Table ${i + 1}`} panel={entry.panel} />
+                <HormoneTable key={entry.id} title={`Hormone Assays — Table ${i + 1}`} panel={entry.panel} panelId={entry.id} />
               ))}
             </div>
           </Card>
-          <Card className="p-5">
+          <Card className="p-5 lg:col-span-2">
             <div className="flex items-center justify-between mb-3">
               <SectionTitle icon={TestTube2} sub="Andrology reports">Semen Analysis (Husband)</SectionTitle>
               <Btn size="sm" variant="subtle" icon={Plus} onClick={() => onAddSemen(patient.id)}>Add Report</Btn>
@@ -1932,6 +1946,12 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
               </table>
             </div>
           </Card>
+          </div>
+        </div>
+      )}
+
+      {tab === "reports" && (
+        <div className="flex flex-col gap-5">
           <Card className="p-5">
             <SectionTitle sub="Procedures">Laparoscopy · HSG · Hysteroscopy · PCR · CBNAAT</SectionTitle>
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
