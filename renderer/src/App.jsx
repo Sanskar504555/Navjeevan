@@ -883,6 +883,13 @@ function HormoneResultCell({ result, unit, highlightId }) {
    panelId (the read-only hormonePanels entry's own id) enables per-result
    highlighting — omitted in editable/form mode. */
 function HormoneTable({ title, panel, panelId, editable, onChange, onRemove }) {
+  const ctx = useContext(HighlightContext);
+  // In read-only mode, a marker with nothing recorded and no highlight is
+  // left out entirely rather than showing a row of dashes.
+  const keys = editable ? HORMONE_KEYS : HORMONE_KEYS.filter(([k]) => {
+    const row = panel[k];
+    return row.date || row.day || row.result || row.lab || ctx?.highlights[`hormone.${panelId}.${k}`];
+  });
   return (
     <div className="rounded-xl p-3" style={{ background: C.slateTint }}>
       <div className="flex items-center justify-between mb-2">
@@ -901,7 +908,10 @@ function HormoneTable({ title, panel, panelId, editable, onChange, onRemove }) {
             </tr>
           </thead>
           <tbody>
-            {HORMONE_KEYS.map(([k, label, unit]) => {
+            {!editable && keys.length === 0 && (
+              <tr><td colSpan={5} className="py-3 text-center text-xs" style={{ color: C.inkFaint }}>No results recorded yet.</td></tr>
+            )}
+            {keys.map(([k, label, unit]) => {
               const row = panel[k];
               return (
                 <tr key={k} style={{ borderTop: `1px solid ${C.border}` }}>
@@ -941,6 +951,9 @@ function HormoneTable({ title, panel, panelId, editable, onChange, onRemove }) {
 
 /* Cycle monitoring grid — mirrors the paper's "Cycle No. 1 / 2 / 3" tables. */
 function CycleTable({ label, cycle, editable, onDateChange, onAddRow, onRemoveRow, onUpdateRow, onRemoveCycle }) {
+  // In read-only mode, a monitoring row with nothing recorded is left out
+  // entirely rather than showing a row of dashes.
+  const rows = editable ? cycle.rows : cycle.rows.filter((r) => r.date || r.day || r.e2 || r.end || r.rtOv || r.ltOv || r.adv);
   return (
     <div className="rounded-xl p-3" style={{ background: C.slateTint }}>
       <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
@@ -968,7 +981,10 @@ function CycleTable({ label, cycle, editable, onDateChange, onAddRow, onRemoveRo
             </tr>
           </thead>
           <tbody>
-            {cycle.rows.map((r) => (
+            {!editable && rows.length === 0 && (
+              <tr><td colSpan={7} className="py-3 text-center text-xs" style={{ color: C.inkFaint }}>No monitoring entries yet.</td></tr>
+            )}
+            {rows.map((r) => (
               <tr key={r.id} style={{ borderTop: `1px solid ${C.border}` }}>
                 {editable ? (
                   <>
