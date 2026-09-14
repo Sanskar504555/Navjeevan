@@ -851,9 +851,13 @@ function Letterhead({ patient }) {
    read-only field in Overview/Reports — see highlightableFields() and the
    "Highlighted for Next Visit" summary card. Reads/writes through the same
    HighlightContext the edit form uses, keyed by the same field id, so a
-   highlight made in either place shows up in both. */
+   highlight made in either place shows up in both. Renders nothing for a
+   blank value, so the summary only shows fields that are actually filled
+   in — unless it's been highlighted, since clearing a highlighted-but-empty
+   field from view would silently lose the reminder. */
 function HighlightRow({ label, value, highlightId }) {
   const h = useHighlight(highlightId);
+  if (!value && !h?.color) return null;
   return (
     <Fragment>
       <dt style={{ color: C.inkFaint }}>{label}</dt>
@@ -1844,12 +1848,11 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
             <SectionTitle icon={ClipboardList}>Registration & History</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm">
               <HighlightRow label="Ref. Doctor" value={patient.refDoctor} highlightId="refDoctor" />
-              <Fragment><dt style={{ color: C.inkFaint }}>Reg. Date</dt><dd style={{ color: C.ink }}>{fmtDate(patient.regDate) || "—"}</dd></Fragment>
+              {patient.regDate && <Fragment><dt style={{ color: C.inkFaint }}>Reg. Date</dt><dd style={{ color: C.ink }}>{fmtDate(patient.regDate)}</dd></Fragment>}
               <HighlightRow label="Address" value={patient.address} highlightId="address" />
               <HighlightRow label="Phone (W)" value={patient.phoneW} highlightId="phoneW" />
               <HighlightRow label="Phone (H)" value={patient.phoneH} highlightId="phoneH" />
               <HighlightRow label="Age (W)" value={patient.ageW} highlightId="ageW" />
-              <HighlightRow label="Age (H)" value={patient.ageH} highlightId="ageH" />
               <HighlightRow label="Education (W)" value={patient.eduW} highlightId="eduW" />
               <HighlightRow label="Education (H)" value={patient.eduH} highlightId="eduH" />
               <HighlightRow label="Occupation (W)" value={patient.occW} highlightId="occW" />
@@ -1887,13 +1890,21 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
           <Card className="p-5 lg:col-span-2">
             <SectionTitle icon={ClipboardList}>Diagnosis & Plan</SectionTitle>
             <div className="grid sm:grid-cols-2 gap-4 text-sm mb-5">
-              <div>
-                <HighlightRow label="Diagnosis" value={patient.diagnosis} highlightId="diagnosis" />
-              </div>
-              <div>
-                <HighlightRow label="Plan of Management" value={patient.planOfManagement} highlightId="planOfManagement" />
-              </div>
-              <div><p className="text-xs mb-1" style={{ color: C.inkFaint }}>Next Follow-up</p><p style={{ color: C.ink }}>{fmtDate(patient.nextFollowUp)}</p></div>
+              {(patient.diagnosis || pendingHighlights.diagnosis) && (
+                <div>
+                  <p className="text-xs mb-1 flex items-center gap-1.5" style={{ color: C.inkFaint }}>Diagnosis<HighlightDots id="diagnosis" /></p>
+                  <p style={{ color: pendingHighlights.diagnosis ? C.brick : C.ink, fontWeight: pendingHighlights.diagnosis ? 600 : 400 }}>{patient.diagnosis || "—"}</p>
+                </div>
+              )}
+              {(patient.planOfManagement || pendingHighlights.planOfManagement) && (
+                <div>
+                  <p className="text-xs mb-1 flex items-center gap-1.5" style={{ color: C.inkFaint }}>Plan of Management<HighlightDots id="planOfManagement" /></p>
+                  <p style={{ color: pendingHighlights.planOfManagement ? C.brick : C.ink, fontWeight: pendingHighlights.planOfManagement ? 600 : 400 }}>{patient.planOfManagement || "—"}</p>
+                </div>
+              )}
+              {patient.nextFollowUp && (
+                <div><p className="text-xs mb-1" style={{ color: C.inkFaint }}>Next Follow-up</p><p style={{ color: C.ink }}>{fmtDate(patient.nextFollowUp)}</p></div>
+              )}
             </div>
             <SectionTitle icon={CalendarClock} sub="OPD monitoring chart">Cycle Monitoring</SectionTitle>
             <div className="flex flex-col gap-4">
@@ -1956,15 +1967,22 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
             <SectionTitle sub="Procedures">Laparoscopy · HSG · Hysteroscopy · PCR · CBNAAT</SectionTitle>
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
               {[["Laparoscopy", patient.laparoscopy, "findings", "laparoscopy.findings"], ["HSG", patient.hsg, "findings", "hsg.findings"], ["Hysteroscopy", patient.hysteroscopy, "findings", "hysteroscopy.findings"],
-              ["PCR", patient.pcr, "result", "pcr.result"], ["CBNAAT", patient.cbnaat, "result", "cbnaat.result"]].map(([l, v, key, hid]) => {
-                const h = pendingHighlights[hid];
-                return (
-                  <div key={l}>
-                    <p className="text-xs mb-1 flex items-center gap-1.5" style={{ color: C.inkFaint }}>{l}<HighlightDots id={hid} /></p>
-                    <p style={{ color: h ? C.brick : C.ink, fontWeight: h ? 600 : 400 }}>{fmtDate(v.date)} — {v[key] || "—"}</p>
-                  </div>
-                );
-              })}
+              ["PCR", patient.pcr, "result", "pcr.result"], ["CBNAAT", patient.cbnaat, "result", "cbnaat.result"]]
+                .filter(([, v, key, hid]) => v.date || v[key] || pendingHighlights[hid])
+                .map(([l, v, key, hid]) => {
+                  const h = pendingHighlights[hid];
+                  return (
+                    <div key={l}>
+                      <p className="text-xs mb-1 flex items-center gap-1.5" style={{ color: C.inkFaint }}>{l}<HighlightDots id={hid} /></p>
+                      <p style={{ color: h ? C.brick : C.ink, fontWeight: h ? 600 : 400 }}>{fmtDate(v.date)} — {v[key] || "—"}</p>
+                    </div>
+                  );
+                })}
+              {!(patient.laparoscopy.date || patient.laparoscopy.findings || patient.hsg.date || patient.hsg.findings
+                || patient.hysteroscopy.date || patient.hysteroscopy.findings || patient.pcr.date || patient.pcr.result
+                || patient.cbnaat.date || patient.cbnaat.result) && (
+                <p className="text-sm" style={{ color: C.inkFaint }}>No procedures recorded yet.</p>
+              )}
             </div>
           </Card>
         </div>
@@ -1981,7 +1999,10 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
               <div key={rx.id} className="rounded-xl p-4" style={{ background: C.slateTint }}>
                 <div className="flex justify-between items-center mb-2">
                   <div>
-                    <p className="text-sm font-semibold" style={{ color: C.ink }}>{fmtDate(rx.date)}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold" style={{ color: C.ink }}>{fmtDate(rx.date)}</p>
+                      <Badge tone={rx.for === "Husband" ? "blue" : "slate"}>{rx.for || "Wife"}</Badge>
+                    </div>
                     <p className="text-xs" style={{ color: C.inkFaint }}>{rx.doctor}</p>
                   </div>
                   <div className="flex items-center gap-3">
@@ -2161,6 +2182,7 @@ function ModalShell({ title, onClose, children, wide }) {
 }
 
 function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initial }) {
+  const [forWhom, setForWhom] = useState(initial?.for || "Wife");
   const [date, setDate] = useState(initial?.date || todayISO());
   const [doctor, setDoctor] = useState(initial?.doctor || "");
   const [advice, setAdvice] = useState(initial?.advice || "");
@@ -2193,7 +2215,8 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
 
   return (
     <ModalShell title={initial ? "Edit Prescription" : "New Prescription"} onClose={onClose} wide>
-      <div className="grid sm:grid-cols-2 gap-4 mb-4">
+      <div className="grid sm:grid-cols-3 gap-4 mb-4">
+        <SelectField label="For" value={forWhom} onChange={setForWhom} options={["Wife", "Husband"]} />
         <TextField label="Date" type="date" value={date} onChange={setDate} />
         <TextField label="Prescribing Doctor" value={doctor} onChange={setDoctor} />
       </div>
@@ -2219,7 +2242,7 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
       <div className="mt-4"><TextAreaField label="General Advice" value={advice} onChange={setAdvice} full /></div>
       <div className="flex justify-end gap-2 mt-5">
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn icon={Save} onClick={() => onSave({ id: initial?.id || uid(), date, doctor, advice, medicines: meds.filter((m) => m.name) })}>{initial ? "Save Changes" : "Save Prescription"}</Btn>
+        <Btn icon={Save} onClick={() => onSave({ id: initial?.id || uid(), for: forWhom, date, doctor, advice, medicines: meds.filter((m) => m.name) })}>{initial ? "Save Changes" : "Save Prescription"}</Btn>
       </div>
     </ModalShell>
   );
@@ -2232,7 +2255,10 @@ function PrescriptionView({ rx }) {
   return (
     <div>
       <div className="flex justify-between items-center mb-3">
-        <p className="text-sm font-semibold" style={{ color: C.ink }}>{fmtDate(rx.date)}</p>
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-semibold" style={{ color: C.ink }}>{fmtDate(rx.date)}</p>
+          <Badge tone={rx.for === "Husband" ? "blue" : "slate"}>{rx.for || "Wife"}</Badge>
+        </div>
         <p className="text-xs" style={{ color: C.inkFaint }}>{rx.doctor || "—"}</p>
       </div>
       <div className="overflow-x-auto emr-scroll">
