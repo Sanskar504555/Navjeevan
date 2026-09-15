@@ -57,7 +57,7 @@ const FONTS = (
       body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       /* Prescriptions print onto pre-printed letterhead stationery — leave
          the clinic's own printed header/footer zones untouched. */
-      .print-rx { margin-top: 10cm; margin-bottom: 5cm; }
+      .print-rx { margin-top: 6cm; margin-bottom: 5cm; }
     }
   `}</style>
 );
