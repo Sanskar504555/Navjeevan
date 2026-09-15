@@ -50,10 +50,14 @@ const FONTS = (
     @keyframes emrFade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
     .print-only { display: none; }
     @media print {
+      @page { size: A4; margin: 0; }
       .no-print { display: none !important; }
       .print-only { display: block !important; }
       .emr-root { background: #fff !important; }
       body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      /* Prescriptions print onto pre-printed letterhead stationery — leave
+         the clinic's own printed header/footer zones untouched. */
+      .print-rx { margin-top: 10cm; margin-bottom: 5cm; }
     }
   `}</style>
 );
@@ -2074,9 +2078,19 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
           {printRxId && (() => {
             const rx = pRx.find((r) => r.id === printRxId);
             if (!rx) return null;
+            // Printed onto pre-printed letterhead paper (see .print-rx) —
+            // no clinic name/address here, just enough to identify the
+            // patient/file, with the age of whichever of the couple this
+            // prescription is actually for.
+            const age = rx.for === "Husband" ? patient.ageH : patient.ageW;
             return (
-              <div className="print-only">
-                <Letterhead patient={patient} />
+              <div className="print-only print-rx">
+                <div className="flex items-center justify-between mb-4" style={{ borderBottom: `1px solid ${C.border}`, paddingBottom: 10 }}>
+                  <div className="text-sm" style={{ color: C.ink }}>
+                    <strong>{patient.patientName || "Unnamed"}</strong> · File No. {patient.fileNo || "—"} · Age {age || "—"}
+                  </div>
+                  <div className="text-xs" style={{ color: C.inkMuted }}>{fmtDate(todayISO())}</div>
+                </div>
                 <PrescriptionView rx={rx} />
               </div>
             );
