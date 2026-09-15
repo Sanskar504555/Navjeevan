@@ -2055,11 +2055,11 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
                     <li key={gi} style={{ color: C.ink }}>
                       • <strong>{g.name}</strong>
                       {g.doses.length === 1 ? (
-                        <> — {g.doses[0].dosage}, {g.doses[0].frequency}{g.doses[0].duration ? `, ${g.doses[0].duration}` : ""} {g.doses[0].instructions && <span style={{ color: C.inkFaint }}>({g.doses[0].instructions})</span>}</>
+                        <> — {g.doses[0].dosage}, {g.doses[0].frequency}{g.doses[0].duration ? `, ${g.doses[0].duration}` : ""}{g.doses[0].quantity ? `, Qty ${g.doses[0].quantity}` : ""} {g.doses[0].instructions && <span style={{ color: C.inkFaint }}>({g.doses[0].instructions})</span>}</>
                       ) : (
                         <ul className="mt-0.5" style={{ paddingLeft: 16 }}>
                           {g.doses.map((d) => (
-                            <li key={d.id}>– {d.dosage}, {d.frequency}{d.duration ? `, ${d.duration}` : ""} {d.instructions && <span style={{ color: C.inkFaint }}>({d.instructions})</span>}</li>
+                            <li key={d.id}>– {d.dosage}, {d.frequency}{d.duration ? `, ${d.duration}` : ""}{d.quantity ? `, Qty ${d.quantity}` : ""} {d.instructions && <span style={{ color: C.inkFaint }}>({d.instructions})</span>}</li>
                           ))}
                         </ul>
                       )}
@@ -2246,9 +2246,9 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
   const [doctor, setDoctor] = useState(initial?.doctor || "");
   const [advice, setAdvice] = useState(initial?.advice || "");
   const [meds, setMeds] = useState(
-    initial?.medicines?.length ? initial.medicines.map((m) => ({ ...m })) : [{ id: uid(), name: "", dosage: "", frequency: "", duration: "", instructions: "" }]
+    initial?.medicines?.length ? initial.medicines.map((m) => ({ ...m })) : [{ id: uid(), name: "", dosage: "", frequency: "", duration: "", quantity: "", instructions: "" }]
   );
-  const addMed = () => setMeds([...meds, { id: uid(), name: "", dosage: "", frequency: "", duration: "", instructions: "" }]);
+  const addMed = () => setMeds([...meds, { id: uid(), name: "", dosage: "", frequency: "", duration: "", quantity: "", instructions: "" }]);
   const updMed = (id, k, v) => setMeds(meds.map((m) => m.id === id ? { ...m, [k]: v } : m));
   const rmMed = (id) => setMeds(meds.filter((m) => m.id !== id));
   // Same drug, another dose/duration (e.g. a tapering schedule) — carries
@@ -2258,7 +2258,7 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
   const dupMed = (id) => {
     const idx = meds.findIndex((m) => m.id === id);
     if (idx === -1) return;
-    const copy = { id: uid(), name: meds[idx].name, dosage: "", frequency: "", duration: "", instructions: "" };
+    const copy = { id: uid(), name: meds[idx].name, dosage: "", frequency: "", duration: "", quantity: "", instructions: "" };
     setMeds([...meds.slice(0, idx + 1), copy, ...meds.slice(idx + 1)]);
   };
 
@@ -2281,11 +2281,12 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
       <p className="text-xs font-medium mb-2" style={{ color: C.inkMuted }}>Medicines</p>
       <div className="flex flex-col gap-3 mb-3">
         {meds.map((m) => (
-          <div key={m.id} className="grid sm:grid-cols-5 gap-2 items-start rounded-xl p-3" style={{ background: C.slateTint }}>
+          <div key={m.id} className="grid sm:grid-cols-6 gap-2 items-start rounded-xl p-3" style={{ background: C.slateTint }}>
             <DropdownOtherField label="Drug Name" value={m.name} onChange={(v) => updMed(m.id, "name", v.toUpperCase())} options={liveDrugOptions} />
             <DropdownOtherField label="Dose" value={m.dosage} onChange={(v) => updMed(m.id, "dosage", v)} options={DOSE_OPTIONS} />
             <DropdownOtherField label="Frequency" value={m.frequency} onChange={(v) => updMed(m.id, "frequency", v)} options={FREQUENCY_OPTIONS} />
             <DropdownOtherField label="Duration" value={m.duration} onChange={(v) => updMed(m.id, "duration", v)} options={DURATION_OPTIONS} />
+            <TextField label="Quantity" value={m.quantity} onChange={(v) => updMed(m.id, "quantity", v)} placeholder="e.g. 30 tabs" />
             <div className="flex gap-2 items-start">
               <TextField label="Instructions" value={m.instructions} onChange={(v) => updMed(m.id, "instructions", v)} />
               <button type="button" onClick={() => dupMed(m.id)} className="pt-6" title="Same drug, another dose/duration" disabled={!m.name}>
@@ -2324,7 +2325,7 @@ function PrescriptionView({ rx, forLabel }) {
           <thead>
             <tr className="text-left" style={{ color: C.inkFaint }}>
               <th className="pb-1 font-medium">Drug</th><th className="pb-1 font-medium">Dose</th>
-              <th className="pb-1 font-medium">Frequency</th><th className="pb-1 font-medium">Duration</th><th className="pb-1 font-medium">Instructions</th>
+              <th className="pb-1 font-medium">Frequency</th><th className="pb-1 font-medium">Duration</th><th className="pb-1 font-medium">Qty</th><th className="pb-1 font-medium">Instructions</th>
             </tr>
           </thead>
           <tbody>
@@ -2332,7 +2333,7 @@ function PrescriptionView({ rx, forLabel }) {
               <tr key={d.id} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
                 {di === 0 && <td className="py-1.5 font-semibold align-top" rowSpan={g.doses.length} style={{ color: C.ink }}>{g.name}</td>}
                 <td className="py-1.5">{d.dosage || "—"}</td>
-                <td className="py-1.5">{d.frequency || "—"}</td><td className="py-1.5">{d.duration || "—"}</td><td className="py-1.5">{d.instructions || "—"}</td>
+                <td className="py-1.5">{d.frequency || "—"}</td><td className="py-1.5">{d.duration || "—"}</td><td className="py-1.5">{d.quantity || "—"}</td><td className="py-1.5">{d.instructions || "—"}</td>
               </tr>
             )))}
           </tbody>
