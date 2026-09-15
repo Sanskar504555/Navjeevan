@@ -859,11 +859,13 @@ function Letterhead({ patient }) {
    HighlightContext the edit form uses, keyed by the same field id, so a
    highlight made in either place shows up in both. Renders nothing for a
    blank value, so the summary only shows fields that are actually filled
-   in — unless it's been highlighted, since clearing a highlighted-but-empty
-   field from view would silently lose the reminder. */
-function HighlightRow({ label, value, highlightId }) {
+   in — unless it's been highlighted (clearing a highlighted-but-empty
+   field from view would silently lose the reminder) or alwaysShow is set,
+   for core identity fields that should stay visible as a "—" prompt to
+   fill them in rather than disappear. */
+function HighlightRow({ label, value, highlightId, alwaysShow }) {
   const h = useHighlight(highlightId);
-  if (!value && !h?.color) return null;
+  if (!value && !h?.color && !alwaysShow) return null;
   return (
     <Fragment>
       <dt style={{ color: C.inkFaint }}>{label}</dt>
@@ -1872,7 +1874,7 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
             <SectionTitle icon={ClipboardList}>Registration & History</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm">
               <HighlightRow label="Ref. Doctor" value={patient.refDoctor} highlightId="refDoctor" />
-              <HighlightRow label="Husband's Name" value={patient.husbandName} highlightId="husbandName" />
+              <HighlightRow label="Husband's Name" value={patient.husbandName} highlightId="husbandName" alwaysShow />
               {patient.regDate && <Fragment><dt style={{ color: C.inkFaint }}>Reg. Date</dt><dd style={{ color: C.ink }}>{fmtDate(patient.regDate)}</dd></Fragment>}
               <HighlightRow label="Address" value={patient.address} highlightId="address" />
               <HighlightRow label="Phone (W)" value={patient.phoneW} highlightId="phoneW" />
