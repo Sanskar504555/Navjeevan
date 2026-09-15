@@ -250,6 +250,7 @@ function blankPatient() {
     refDoctor: "",
     regDate: todayISO(),
     patientName: "",
+    husbandName: "",
     address: "",
     phoneW: "",
     phoneH: "",
@@ -447,6 +448,7 @@ const SEMEN_COLUMNS = [["date", "Date"], ["lab", "Lab"], ["count", "Count"], ["m
 function highlightableFields(patient) {
   return [
     { id: "refDoctor", label: "Ref. Doctor", value: patient.refDoctor },
+    { id: "husbandName", label: "Husband's Name", value: patient.husbandName },
     { id: "address", label: "Address", value: patient.address },
     { id: "phoneW", label: "Phone (W)", value: patient.phoneW },
     { id: "phoneH", label: "Phone (H)", value: patient.phoneH },
@@ -1512,7 +1514,8 @@ function PatientForm({ initial, onSave, onCancel }) {
               <TextField label="File No." value={data.fileNo} onChange={(v) => set("fileNo", v)} highlightId="fileNo" />
               <TextField label="Ref. by Dr." value={data.refDoctor} onChange={(v) => set("refDoctor", v)} highlightId="refDoctor" />
               <TextField label="Date" type="date" value={data.regDate} onChange={(v) => set("regDate", v)} highlightId="regDate" />
-              <TextField label="Patient's Name (Wife)" value={data.patientName} onChange={(v) => set("patientName", v)} full highlightId="patientName" />
+              <TextField label="Patient's Name (Wife)" value={data.patientName} onChange={(v) => set("patientName", v)} highlightId="patientName" />
+              <TextField label="Husband's Name" value={data.husbandName} onChange={(v) => set("husbandName", v)} highlightId="husbandName" />
               <TextAreaField label="Address" value={data.address} onChange={(v) => set("address", v)} full highlightId="address" />
               <TextField label="Phone (W)" value={data.phoneW} onChange={(v) => set("phoneW", v)} highlightId="phoneW" />
               <TextField label="Phone (H)" value={data.phoneH} onChange={(v) => set("phoneH", v)} highlightId="phoneH" />
@@ -1756,6 +1759,7 @@ function PatientForm({ initial, onSave, onCancel }) {
 function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPrescription, onUpdatePrescription, onDeletePrescription, onAddCycle, onAddMonitoring, onAddSemen, onAddFile, onRemoveFile, onSaveHighlights }) {
   const [tab, setTab] = useState("overview");
   const [rxOpen, setRxOpen] = useState(false);
+  const [rxFor, setRxFor] = useState("Wife");
   const [editRxId, setEditRxId] = useState(null);
   const [viewRxId, setViewRxId] = useState(null);
   const [printRxId, setPrintRxId] = useState(null);
@@ -1868,6 +1872,7 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
             <SectionTitle icon={ClipboardList}>Registration & History</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm">
               <HighlightRow label="Ref. Doctor" value={patient.refDoctor} highlightId="refDoctor" />
+              <HighlightRow label="Husband's Name" value={patient.husbandName} highlightId="husbandName" />
               {patient.regDate && <Fragment><dt style={{ color: C.inkFaint }}>Reg. Date</dt><dd style={{ color: C.ink }}>{fmtDate(patient.regDate)}</dd></Fragment>}
               <HighlightRow label="Address" value={patient.address} highlightId="address" />
               <HighlightRow label="Phone (W)" value={patient.phoneW} highlightId="phoneW" />
@@ -2008,21 +2013,33 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
         </div>
       )}
 
-      {tab === "prescriptions" && (
+      {tab === "prescriptions" && (() => {
+        const wifeLabel = patient.patientName || "Wife";
+        const husbandLabel = patient.husbandName || "Husband";
+        const rxForLabel = rxFor === "Husband" ? husbandLabel : wifeLabel;
+        const scopedRx = pRx.filter((r) => (r.for || "Wife") === rxFor);
+        return (
         <Card className="p-5">
           <div className="flex items-center justify-between mb-3 no-print">
             <SectionTitle icon={Pill}>Prescriptions</SectionTitle>
-            <Btn size="sm" icon={Plus} onClick={() => setRxOpen(true)}>New Prescription</Btn>
+          </div>
+          <div className="flex gap-1 mb-4 no-print border-b" style={{ borderColor: C.border }}>
+            {[["Wife", wifeLabel], ["Husband", husbandLabel]].map(([key, label]) => (
+              <button key={key} onClick={() => setRxFor(key)} className="px-4 py-2 text-sm font-medium whitespace-nowrap"
+                style={{ color: rxFor === key ? C.primary : C.inkFaint, borderBottom: rxFor === key ? `2px solid ${C.primary}` : "2px solid transparent" }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="flex justify-end mb-3 no-print">
+            <Btn size="sm" icon={Plus} onClick={() => setRxOpen(true)}>New Prescription for {rxForLabel}</Btn>
           </div>
           <div className="flex flex-col gap-3 no-print">
-            {_.orderBy(pRx, ["date"], ["desc"]).map((rx) => (
+            {_.orderBy(scopedRx, ["date"], ["desc"]).map((rx) => (
               <div key={rx.id} className="rounded-xl p-4" style={{ background: C.slateTint }}>
                 <div className="flex justify-between items-center mb-2">
                   <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-semibold" style={{ color: C.ink }}>{fmtDate(rx.date)}</p>
-                      <Badge tone={rx.for === "Husband" ? "blue" : "slate"}>{rx.for || "Wife"}</Badge>
-                    </div>
+                    <p className="text-sm font-semibold" style={{ color: C.ink }}>{fmtDate(rx.date)}</p>
                     <p className="text-xs" style={{ color: C.inkFaint }}>{rx.doctor}</p>
                   </div>
                   <div className="flex items-center gap-3">
@@ -2050,24 +2067,31 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
                 {rx.advice && <p className="text-xs mt-2" style={{ color: C.inkMuted }}>Advice: {rx.advice}</p>}
               </div>
             ))}
-            {pRx.length === 0 && <p className="text-sm" style={{ color: C.inkFaint }}>No prescriptions recorded yet.</p>}
+            {scopedRx.length === 0 && <p className="text-sm" style={{ color: C.inkFaint }}>No prescriptions recorded yet for {rxForLabel}.</p>}
           </div>
 
-          {rxOpen && <PrescriptionModal drugOptions={drugOptions} onClose={() => setRxOpen(false)} onSave={(rx) => { onAddPrescription(patient.id, rx); setRxOpen(false); }} />}
-          {editRxId && (
-            <PrescriptionModal
-              drugOptions={drugOptions}
-              initial={pRx.find((r) => r.id === editRxId)}
-              onClose={() => setEditRxId(null)}
-              onSave={(rx) => { onUpdatePrescription({ ...rx, patientId: patient.id }); setEditRxId(null); }}
-            />
-          )}
+          {rxOpen && <PrescriptionModal drugOptions={drugOptions} forWhom={rxFor} forLabel={rxForLabel} onClose={() => setRxOpen(false)} onSave={(rx) => { onAddPrescription(patient.id, rx); setRxOpen(false); }} />}
+          {editRxId && (() => {
+            const editing = pRx.find((r) => r.id === editRxId);
+            if (!editing) return null;
+            const editFor = editing.for || "Wife";
+            return (
+              <PrescriptionModal
+                drugOptions={drugOptions}
+                initial={editing}
+                forWhom={editFor}
+                forLabel={editFor === "Husband" ? husbandLabel : wifeLabel}
+                onClose={() => setEditRxId(null)}
+                onSave={(rx) => { onUpdatePrescription({ ...rx, patientId: patient.id }); setEditRxId(null); }}
+              />
+            );
+          })()}
           {viewRxId && (() => {
             const rx = pRx.find((r) => r.id === viewRxId);
             if (!rx) return null;
             return (
               <ModalShell title={`Prescription — ${fmtDate(rx.date)}`} onClose={() => setViewRxId(null)} wide>
-                <PrescriptionView rx={rx} />
+                <PrescriptionView rx={rx} forLabel={rx.for === "Husband" ? husbandLabel : wifeLabel} />
                 <div className="flex justify-end gap-2 mt-5">
                   <Btn variant="ghost" icon={Printer} onClick={() => printRx(rx.id)}>Print</Btn>
                   <Btn variant="ghost" onClick={() => setViewRxId(null)}>Close</Btn>
@@ -2080,23 +2104,26 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
             if (!rx) return null;
             // Printed onto pre-printed letterhead paper (see .print-rx) —
             // no clinic name/address here, just enough to identify the
-            // patient/file, with the age of whichever of the couple this
-            // prescription is actually for.
-            const age = rx.for === "Husband" ? patient.ageH : patient.ageW;
+            // patient/file, with the name and age of whichever of the
+            // couple this prescription is actually for.
+            const isHusband = rx.for === "Husband";
+            const printName = isHusband ? husbandLabel : (patient.patientName || "Unnamed");
+            const age = isHusband ? patient.ageH : patient.ageW;
             return (
               <div className="print-only print-rx">
                 <div className="flex items-center justify-between mb-4" style={{ borderBottom: `1px solid ${C.border}`, paddingBottom: 10 }}>
                   <div className="text-sm" style={{ color: C.ink }}>
-                    <strong>{patient.patientName || "Unnamed"}</strong> · File No. {patient.fileNo || "—"} · Age {age || "—"}
+                    <strong>{printName}</strong> · File No. {patient.fileNo || "—"} · Age {age || "—"}
                   </div>
                   <div className="text-xs" style={{ color: C.inkMuted }}>{fmtDate(todayISO())}</div>
                 </div>
-                <PrescriptionView rx={rx} />
+                <PrescriptionView rx={rx} forLabel={isHusband ? husbandLabel : wifeLabel} />
               </div>
             );
           })()}
         </Card>
-      )}
+        );
+      })()}
 
       {tab === "cycles" && (
         <div className="flex flex-col gap-5">
@@ -2211,8 +2238,8 @@ function ModalShell({ title, onClose, children, wide }) {
   );
 }
 
-function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initial }) {
-  const [forWhom, setForWhom] = useState(initial?.for || "Wife");
+function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initial, forWhom = "Wife", forLabel }) {
+  const resolvedFor = initial?.for || forWhom;
   const [date, setDate] = useState(initial?.date || todayISO());
   const [doctor, setDoctor] = useState(initial?.doctor || "");
   const [advice, setAdvice] = useState(initial?.advice || "");
@@ -2244,9 +2271,8 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
   );
 
   return (
-    <ModalShell title={initial ? "Edit Prescription" : "New Prescription"} onClose={onClose} wide>
-      <div className="grid sm:grid-cols-3 gap-4 mb-4">
-        <SelectField label="For" value={forWhom} onChange={setForWhom} options={["Wife", "Husband"]} />
+    <ModalShell title={`${initial ? "Edit" : "New"} Prescription — ${forLabel || resolvedFor}`} onClose={onClose} wide>
+      <div className="grid sm:grid-cols-2 gap-4 mb-4">
         <TextField label="Date" type="date" value={date} onChange={setDate} />
         <TextField label="Prescribing Doctor" value={doctor} onChange={setDoctor} />
       </div>
@@ -2272,7 +2298,7 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
       <div className="mt-4"><TextAreaField label="General Advice" value={advice} onChange={setAdvice} full /></div>
       <div className="flex justify-end gap-2 mt-5">
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn icon={Save} onClick={() => onSave({ id: initial?.id || uid(), for: forWhom, date, doctor, advice, medicines: meds.filter((m) => m.name) })}>{initial ? "Save Changes" : "Save Prescription"}</Btn>
+        <Btn icon={Save} onClick={() => onSave({ id: initial?.id || uid(), for: resolvedFor, date, doctor, advice, medicines: meds.filter((m) => m.name) })}>{initial ? "Save Changes" : "Save Prescription"}</Btn>
       </div>
     </ModalShell>
   );
@@ -2281,13 +2307,13 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
 /* Read-only prescription detail — shared between the View modal (on screen)
    and the hidden print-only block (see printRxId in PatientDetail), so the
    two never drift apart. */
-function PrescriptionView({ rx }) {
+function PrescriptionView({ rx, forLabel }) {
   return (
     <div>
       <div className="flex justify-between items-center mb-3">
         <div className="flex items-center gap-2">
           <p className="text-sm font-semibold" style={{ color: C.ink }}>{fmtDate(rx.date)}</p>
-          <Badge tone={rx.for === "Husband" ? "blue" : "slate"}>{rx.for || "Wife"}</Badge>
+          <Badge tone={rx.for === "Husband" ? "blue" : "slate"}>{forLabel || rx.for || "Wife"}</Badge>
         </div>
         <p className="text-xs" style={{ color: C.inkFaint }}>{rx.doctor || "—"}</p>
       </div>
