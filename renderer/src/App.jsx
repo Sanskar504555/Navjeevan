@@ -809,7 +809,7 @@ function Badge({ children, tone = "slate" }) {
     </span>
   );
 }
-function treatmentTone(t) { return t === "IVF" ? "gold" : t === "IUI" ? "blue" : "slate"; }
+function treatmentTone(t) { return /^(IVF|ICSI)/.test(t || "") ? "gold" : /^IUI/.test(t || "") ? "blue" : "slate"; }
 function statusTone(s) { return s === "Active" ? "green" : s === "Completed" ? "slate" : s === "Discontinued" ? "brick" : "slate"; }
 
 function Toast({ toast }) {
@@ -932,6 +932,7 @@ function HormoneTable({ title, panel, panelId, editable, onChange, onRemove }) {
                         <div className="flex items-center gap-1">
                           <input value={row.result} onChange={(e) => onChange(k, "result", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} />
                           <span className="text-[10px] whitespace-nowrap" style={{ color: C.inkFaint }}>{unit}</span>
+                          {panelId && <HighlightDots id={`hormone.${panelId}.${k}`} />}
                         </div>
                       </td>
                       <td className="py-1 pr-2"><input value={row.lab} onChange={(e) => onChange(k, "lab", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
@@ -1257,8 +1258,8 @@ function Dashboard({ patients, setView, openPatient }) {
     return !isNaN(d) && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
   }).length;
 
-  const iuiCount = patients.filter((p) => p.treatmentType === "IUI").length;
-  const ivfCount = patients.filter((p) => p.treatmentType === "IVF").length;
+  const iuiCount = patients.filter((p) => /^IUI/.test(p.treatmentType || "")).length;
+  const ivfCount = patients.filter((p) => /^(IVF|ICSI)/.test(p.treatmentType || "")).length;
 
   const followUps = patients
     .filter((p) => p.nextFollowUp)
@@ -1386,7 +1387,7 @@ function PatientsList({ patients, openPatient, setView, deletePatient }) {
               className="text-sm outline-none flex-1" style={{ color: C.ink }} />
           </div>
           <select value={tFilter} onChange={(e) => setTFilter(e.target.value)} className="rounded-lg px-3 py-2 text-sm" style={{ border: `1px solid ${C.borderStrong}`, color: C.ink }}>
-            {["All", "IUI", "IVF", "Optimization", "Other"].map((o) => <option key={o}>{o}</option>)}
+            {["All", "Optimization", "IUI (H)", "IUI (D)", "IVF", "ICSI (H)", "ICSI (D)", "Donor Oocyte", "Other"].map((o) => <option key={o}>{o}</option>)}
           </select>
         </div>
         <div className="overflow-x-auto emr-scroll">
@@ -1628,7 +1629,7 @@ function PatientForm({ initial, onSave, onCancel }) {
             </div>
             <div className="flex flex-col gap-4">
               {data.hormonePanels.map((entry, i) => (
-                <HormoneTable key={entry.id} title={`Hormone Assays — Table ${i + 1}`} panel={entry.panel} editable
+                <HormoneTable key={entry.id} title={`Hormone Assays — Table ${i + 1}`} panel={entry.panel} panelId={entry.id} editable
                   onChange={(k, f, v) => updHormonePanel(entry.id, k, f, v)}
                   onRemove={data.hormonePanels.length > 1 ? () => removeHormonePanel(entry.id) : undefined} />
               ))}
@@ -1722,7 +1723,7 @@ function PatientForm({ initial, onSave, onCancel }) {
             <div className="grid sm:grid-cols-2 gap-4">
               <TextAreaField label="Diagnosis" value={data.diagnosis} onChange={(v) => set("diagnosis", v)} full rows={3} highlightId="diagnosis" />
               <TextAreaField label="Plan of Management" value={data.planOfManagement} onChange={(v) => set("planOfManagement", v)} full rows={3} highlightId="planOfManagement" />
-              <DropdownOtherField label="Treatment Suggested" value={data.treatmentType} onChange={(v) => set("treatmentType", v)} options={["Optimization", "IUI", "IVF"]} highlightId="treatmentType" />
+              <DropdownOtherField label="Treatment Suggested" value={data.treatmentType} onChange={(v) => set("treatmentType", v)} options={["Optimization", "IUI (H)", "IUI (D)", "IVF", "ICSI (H)", "ICSI (D)", "Donor Oocyte"]} highlightId="treatmentType" />
               <SelectField label="Status" value={data.status} onChange={(v) => set("status", v)} options={["Active", "Follow-up", "Completed", "Discontinued"]} highlightId="status" />
               <TextField label="Next Follow-up Date" type="date" value={data.nextFollowUp} onChange={(v) => set("nextFollowUp", v)} highlightId="nextFollowUp" />
             </div>
