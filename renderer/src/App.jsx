@@ -1842,7 +1842,7 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
       </div>
 
       {highlightedItems.length > 0 && (
-        <Card className="p-4" style={{ background: C.brickTint, border: `1px solid ${C.brick}` }}>
+        <Card className="p-4 no-print" style={{ background: C.brickTint, border: `1px solid ${C.brick}` }}>
           <div className="flex items-center gap-2 mb-2">
             <Star size={15} style={{ color: C.brick }} fill={C.brick} />
             <p className="text-sm font-semibold" style={{ color: C.primaryDark }}>Highlighted for Next Visit</p>
