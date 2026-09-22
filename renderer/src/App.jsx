@@ -278,14 +278,14 @@ function blankPatient() {
       rs: "", cvs: "",
     },
     invest: {
-      hb: "", urine: "", esr: "", blGroup: "",
+      hbEntries: [blankTestEntry()], urineEntries: [blankTestEntry()], esr: "", blGroup: "",
       bslFasting: "", bslPP: "", bslRandom: "",
       vdrl: "", hiv: "", hbsAg: "",
       srCreatinine: "", srInsulin: "", homaGlucose: "", homaIR: "",
       rubella: "", papSmear: "", apla: "",
       misc: "",
     },
-    hormonePanels: [blankHormonePanelEntry()],
+    hormoneAssays: blankHormoneAssays(),
     laparoscopy: { date: "", findings: "" },
     hsg: { date: "", findings: "" },
     hysteroscopy: { date: "", findings: "" },
@@ -294,7 +294,7 @@ function blankPatient() {
     husband: {
       habitsHistory: "", genitalExam: "", miscInvestigations: "", semenAnalysis: [],
       invest: {
-        hb: "", urine: "", esr: "", blGroup: "",
+        hbEntries: [blankTestEntry()], urineEntries: [blankTestEntry()], esr: "", blGroup: "",
         bslFasting: "", bslPP: "", bslRandom: "",
         vdrl: "", hiv: "", hbsAg: "",
         srCreatinine: "", srInsulin: "", homaGlucose: "", homaIR: "",
@@ -311,19 +311,26 @@ function blankPatient() {
     // Field ids the doctor has highlighted as worth revisiting next
     // appointment, mapped to "yellow" | "red" — see HighlightContext.
     // Keys are the same dot-paths set() uses in PatientForm (e.g.
-    // "exam.bmi", "husband.invest.hb", "diagnosis").
+    // "exam.bmi", "husband.invest.blGroup", "diagnosis").
     highlights: {},
     createdAt: new Date().toISOString(),
   };
 }
 
-/* Cap: at most 3 hormone assay tables / 6 monitoring cycles per patient
-   (see MAX_HORMONE_PANELS / MAX_CYCLES below, used by the Add buttons). */
-function blankHormonePanel() {
-  return _.fromPairs(HORMONE_KEYS.map(([k]) => [k, { date: "", day: "", result: "", lab: "" }]));
+/* Each hormone marker (FSH, LH, ...) holds its own array of entries, so a
+   marker that needs repeating gets one more entry for just that marker
+   instead of a whole new table of all six. */
+function blankHormoneAssayEntry() {
+  return { id: uid(), date: "", day: "", result: "", lab: "" };
 }
-function blankHormonePanelEntry() {
-  return { id: uid(), panel: blankHormonePanel() };
+function blankHormoneAssays() {
+  return _.fromPairs(HORMONE_KEYS.map(([k]) => [k, [blankHormoneAssayEntry()]]));
+}
+/* A single dated reading for a test that's occasionally repeated (Hb,
+   Urine) but doesn't need a full day-of-cycle/lab breakdown like the
+   hormone panel does. */
+function blankTestEntry() {
+  return { id: uid(), date: "", result: "" };
 }
 function blankCycleRow() {
   return { id: uid(), date: "", day: "", e2: "", end: "", rtOv: "", ltOv: "", adv: "" };
@@ -331,13 +338,14 @@ function blankCycleRow() {
 function blankPaperCycle() {
   return { id: uid(), date: "", rows: Array.from({ length: 9 }, blankCycleRow) };
 }
-const MAX_HORMONE_PANELS = 3;
 const MAX_CYCLES = 6;
 
 /* Migrates a patient record saved under an older schema onto the current
    one: paperCycles {cycle1,cycle2,cycle3} -> cycles: [...] (dynamic,
-   max 6); hormonePanels {initial,repeat} -> hormonePanels: [...] (dynamic,
-   max 3, "Recepit" retired); invest.bslType/bsl -> the three separate
+   max 6); hormonePanels (whole tables of all 6 markers, up to 3) ->
+   hormoneAssays (each marker its own repeatable array of entries);
+   invest.hb/invest.urine (single string) -> hbEntries/urineEntries
+   (repeatable dated entries); invest.bslType/bsl -> the three separate
    Fasting/PP/Random Sugar fields. Only touches records that still have the
    old shape — a record already on the new shape passes through untouched. */
 function migrateLegacyShapes(p) {
@@ -354,13 +362,43 @@ function migrateLegacyShapes(p) {
   }
   delete out.paperCycles;
 
-  if (!Array.isArray(out.hormonePanels)) {
-    const hp = out.hormonePanels && typeof out.hormonePanels === "object" ? out.hormonePanels : {};
-    const legacy = [hp.initial, hp.repeat].filter(Boolean);
-    out.hormonePanels = legacy.length
-      ? legacy.map((panel) => ({ id: uid(), panel }))
-      : [blankHormonePanelEntry()];
+  if (!out.hormoneAssays) {
+    // Oldest shape: {initial, repeat} whole panels. Newer (pre-this-update)
+    // shape: an array of {id, panel: {marker: entry}} whole tables. Either
+    // way, flatten every panel's per-marker entry into that marker's array.
+    const legacyPanels = Array.isArray(out.hormonePanels)
+      ? out.hormonePanels
+      : (out.hormonePanels && typeof out.hormonePanels === "object"
+        ? [out.hormonePanels.initial, out.hormonePanels.repeat].filter(Boolean).map((panel) => ({ panel }))
+        : []);
+    out.hormoneAssays = _.fromPairs(HORMONE_KEYS.map(([k]) => {
+      const entries = legacyPanels
+        .map((p2) => p2.panel && p2.panel[k])
+        .filter((e) => e && (e.date || e.day || e.result || e.lab))
+        .map((e) => ({ id: uid(), date: e.date || "", day: e.day || "", result: e.result || "", lab: e.lab || "" }));
+      return [k, entries.length ? entries : [blankHormoneAssayEntry()]];
+    }));
   }
+  delete out.hormonePanels;
+
+  // A single-string Hb/Urine value becomes one dated entry (date left blank
+  // — the original field never recorded one); husband.invest gets the same
+  // treatment via the invest param below.
+  const migrateTestEntries = (invest) => {
+    if (!invest) return invest;
+    const next = { ...invest };
+    if (!Array.isArray(next.hbEntries)) {
+      next.hbEntries = next.hb ? [{ id: uid(), date: "", result: next.hb }] : [blankTestEntry()];
+    }
+    delete next.hb;
+    if (!Array.isArray(next.urineEntries)) {
+      next.urineEntries = next.urine ? [{ id: uid(), date: "", result: next.urine }] : [blankTestEntry()];
+    }
+    delete next.urine;
+    return next;
+  };
+  if (out.invest) out.invest = migrateTestEntries(out.invest);
+  if (out.husband?.invest) out.husband = { ...out.husband, invest: migrateTestEntries(out.husband.invest) };
 
   const migrateBSL = (invest) => {
     if (!invest || (invest.bslType === undefined && invest.bsl === undefined)) return invest;
@@ -405,8 +443,11 @@ const EXAM_FIELDS = [
   ["tvsRightOvary", "TVS — Right Ovary"], ["tvsLeftOvary", "TVS — Left Ovary"],
   ["rs", "R.S."], ["cvs", "C.V.S."],
 ];
+/* Hb and Urine are repeatable dated tests (hbEntries/urineEntries) shown
+   via their own section, not this fixed single-value list — see
+   RepeatableTest in the form and RepeatableTestRow in Overview. */
 const INVEST_FIELDS = [
-  ["hb", "Hb"], ["urine", "Urine"], ["esr", "ESR"], ["blGroup", "Bl. Group"],
+  ["esr", "ESR"], ["blGroup", "Bl. Group"],
   ["bslFasting", "BSL — Fasting Sugar"], ["bslPP", "BSL — PP Sugar"], ["bslRandom", "BSL — Random Sugar"],
   ["vdrl", "VDRL"], ["hiv", "HIV"], ["hbsAg", "HBs Ag"],
   ["srCreatinine", "Sr. Creatinine"], ["srInsulin", "Sr. Insulin"],
@@ -439,7 +480,7 @@ const SEMEN_COLUMNS = [["date", "Date"], ["lab", "Lab"], ["count", "Count"], ["m
 /* Every read-only field in PatientDetail's Overview/Reports that can be
    highlighted, for the "Highlighted for Next Visit" summary card. Ids match
    the dot-paths PatientForm's set() uses for the same field (e.g.
-   "exam.bmi", "husband.invest.hb"), so a highlight made while editing and
+   "exam.bmi", "husband.invest.blGroup"), so a highlight made while editing and
    one made while reviewing land on the exact same key — see
    HighlightContext. Semen analysis rows and hormone assay panels use their
    own stable row/panel id ("semen.<rowId>.<column>",
@@ -483,13 +524,33 @@ function highlightableFields(patient) {
         value: key === "date" ? fmtDate(r[key]) : r[key],
       }))
     ),
-    ...(patient.hormonePanels || []).flatMap((entry, i) =>
-      HORMONE_KEYS.map(([k, label, unit]) => ({
-        id: `hormone.${entry.id}.${k}`,
-        label: `Hormone Assays #${i + 1} — ${label}`,
-        value: entry.panel[k]?.result ? `${entry.panel[k].result} ${unit}` : "",
+    ...HORMONE_KEYS.flatMap(([k, label, unit]) =>
+      (patient.hormoneAssays?.[k] || []).map((entry, i) => ({
+        id: `hormone.${k}.${entry.id}`,
+        label: `${label}${(patient.hormoneAssays[k].length > 1) ? ` #${i + 1}` : ""}`,
+        value: entry.result ? `${entry.result} ${unit}` : "",
       }))
     ),
+    ...(patient.invest.hbEntries || []).map((entry, i) => ({
+      id: `invest.hbEntries.${entry.id}`,
+      label: `Hb (Wife)${patient.invest.hbEntries.length > 1 ? ` #${i + 1}` : ""}`,
+      value: entry.result,
+    })),
+    ...(patient.invest.urineEntries || []).map((entry, i) => ({
+      id: `invest.urineEntries.${entry.id}`,
+      label: `Urine (Wife)${patient.invest.urineEntries.length > 1 ? ` #${i + 1}` : ""}`,
+      value: entry.result,
+    })),
+    ...(patient.husband.invest.hbEntries || []).map((entry, i) => ({
+      id: `husband.invest.hbEntries.${entry.id}`,
+      label: `Hb (Husband)${patient.husband.invest.hbEntries.length > 1 ? ` #${i + 1}` : ""}`,
+      value: entry.result,
+    })),
+    ...(patient.husband.invest.urineEntries || []).map((entry, i) => ({
+      id: `husband.invest.urineEntries.${entry.id}`,
+      label: `Urine (Husband)${patient.husband.invest.urineEntries.length > 1 ? ` #${i + 1}` : ""}`,
+      value: entry.result,
+    })),
   ];
 }
 
@@ -544,7 +605,7 @@ const FILE_ACCEPT = ".doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.pdf,application/mswo
    {fieldId: "red"} map plus a toggle function; every field primitive below
    reads it via useHighlight(highlightId) and renders the same single dot.
    Field ids are the same dot-paths already used by PatientForm's
-   set(path, val) (e.g. "exam.bmi", "husband.invest.hb", "diagnosis"), so a
+   set(path, val) (e.g. "exam.bmi", "husband.invest.blGroup", "diagnosis"), so a
    highlight set while editing shows up identically when just reviewing the
    record, and vice versa. */
 const HighlightContext = createContext(null);
@@ -877,73 +938,128 @@ function HighlightRow({ label, value, highlightId, alwaysShow }) {
   );
 }
 
-function HormoneResultCell({ result, unit, highlightId }) {
-  const h = useHighlight(highlightId);
+/* A test that's occasionally repeated (Hb, Urine) — starts as one dated
+   entry; "+" adds another entry for just this test when it needs
+   re-checking, instead of duplicating the whole investigations panel. */
+function RepeatableTest({ label, entries, onAdd, onRemove, onUpdate, highlightPrefix }) {
   return (
-    <span className="inline-flex items-center gap-1.5" style={{ color: h?.color ? C.brick : C.ink, fontWeight: h?.color ? 600 : 400 }}>
-      <span>{result ? `${result} ${unit}` : "—"}</span>
-      <HighlightDots id={highlightId} />
-    </span>
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium" style={{ color: C.inkMuted }}>{label}</span>
+        <button type="button" onClick={onAdd} title={`Add another ${label} reading`}>
+          <Plus size={13} style={{ color: C.primary }} />
+        </button>
+      </div>
+      {entries.map((e) => (
+        <div key={e.id} className="flex items-center gap-1.5">
+          <input type="date" value={e.date} onChange={(ev) => onUpdate(e.id, "date", ev.target.value)}
+            className="text-xs rounded px-2 py-1.5 outline-none shrink-0" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff", width: 118 }} />
+          <input value={e.result} onChange={(ev) => onUpdate(e.id, "result", ev.target.value)} placeholder={label}
+            className="text-xs rounded px-2 py-1.5 outline-none flex-1 min-w-0" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} />
+          <HighlightDots id={`${highlightPrefix}.${e.id}`} />
+          {entries.length > 1 && <button type="button" onClick={() => onRemove(e.id)}><Trash2 size={13} style={{ color: C.inkFaint }} /></button>}
+        </div>
+      ))}
+    </div>
   );
 }
-/* Hormone panel table — mirrors the paper's "Hormone Assays" / "Recepit" tables
-   (one row per Serum marker, each with its own Date / Day of Cycle / Result / Lab).
-   panelId (the read-only hormonePanels entry's own id) enables per-result
-   highlighting — omitted in editable/form mode. */
-function HormoneTable({ title, panel, panelId, editable, onChange, onRemove }) {
+/* Read-only counterpart to RepeatableTest — a dt/dd row (fits the same
+   grid the other Overview fields use) listing every recorded reading,
+   newest first isn't enforced (dates are typed, not orderable reliably).
+   Hidden entirely when nothing's recorded and nothing's highlighted. */
+function RepeatableTestRow({ label, entries, highlightPrefix }) {
   const ctx = useContext(HighlightContext);
-  // In read-only mode, a marker with nothing recorded and no highlight is
-  // left out entirely rather than showing a row of dashes.
-  const keys = editable ? HORMONE_KEYS : HORMONE_KEYS.filter(([k]) => {
-    const row = panel[k];
-    return row.date || row.day || row.result || row.lab || ctx?.highlights[`hormone.${panelId}.${k}`];
+  const shown = (entries || []).filter((e) => e.result || ctx?.highlights[`${highlightPrefix}.${e.id}`]);
+  if (shown.length === 0) return null;
+  return (
+    <Fragment>
+      <dt style={{ color: C.inkFaint }}>{label}</dt>
+      <dd className="flex flex-col gap-1">
+        {shown.map((e) => {
+          const hid = `${highlightPrefix}.${e.id}`;
+          const h = ctx?.highlights[hid];
+          return (
+            <span key={e.id} className="flex items-center gap-1.5" style={{ color: h ? C.brick : C.ink, fontWeight: h ? 600 : 400 }}>
+              <span>{e.date ? `${fmtDate(e.date)}: ` : ""}{e.result || "—"}</span>
+              <HighlightDots id={hid} />
+            </span>
+          );
+        })}
+      </dd>
+    </Fragment>
+  );
+}
+
+/* Hormone Assays — mirrors the paper's "Hormone Assays" table, one row per
+   Serum marker (FSH, LH, ...), each with its own Date / Day of Cycle /
+   Result / Lab. Unlike the old design (a whole new table of all 6 markers
+   to repeat any one of them), each marker holds its own array of entries —
+   "+" next to a marker adds just another entry for that marker. */
+function HormoneAssaySection({ hormoneAssays, editable, onAdd, onRemove, onUpdate }) {
+  const ctx = useContext(HighlightContext);
+  const rows = HORMONE_KEYS.flatMap(([k, label, unit]) => {
+    const entries = editable
+      ? hormoneAssays[k]
+      : hormoneAssays[k].filter((e) => e.date || e.day || e.result || e.lab || ctx?.highlights[`hormone.${k}.${e.id}`]);
+    return entries.map((entry, i) => ({ key: k, label, unit, entry, i, count: entries.length }));
   });
   return (
     <div className="rounded-xl p-3" style={{ background: C.slateTint }}>
-      <div className="flex items-center justify-between mb-2">
-        <p className="text-xs font-semibold" style={{ color: C.primaryDark }}>{title}</p>
-        {onRemove && <button type="button" onClick={onRemove}><Trash2 size={13} style={{ color: C.inkFaint }} /></button>}
-      </div>
       <div className="overflow-x-auto emr-scroll">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left" style={{ color: C.inkFaint }}>
-              <th className="pb-1 font-medium text-xs w-32">Date</th>
               <th className="pb-1 font-medium text-xs">Serum</th>
+              <th className="pb-1 font-medium text-xs w-32">Date</th>
               <th className="pb-1 font-medium text-xs w-24">Day of Cycle</th>
               <th className="pb-1 font-medium text-xs">Result</th>
               <th className="pb-1 font-medium text-xs w-28">Lab</th>
+              {editable && <th className="w-14"></th>}
             </tr>
           </thead>
           <tbody>
-            {!editable && keys.length === 0 && (
+            {!editable && rows.length === 0 && (
               <tr><td colSpan={5} className="py-3 text-center text-xs" style={{ color: C.inkFaint }}>No results recorded yet.</td></tr>
             )}
-            {keys.map(([k, label, unit]) => {
-              const row = panel[k];
+            {rows.map(({ key: k, label, unit, entry: row, i, count }) => {
+              const hid = `hormone.${k}.${row.id}`;
               return (
-                <tr key={k} style={{ borderTop: `1px solid ${C.border}` }}>
+                <tr key={row.id} style={{ borderTop: `1px solid ${C.border}` }}>
+                  {i === 0 && (
+                    <td rowSpan={count} className="py-1 pr-2 font-medium align-top" style={{ color: C.ink }}>
+                      <div className="flex items-center gap-1.5">
+                        {label}
+                        {editable && <button type="button" onClick={() => onAdd(k)} title={`Add another ${label} reading`}><Plus size={13} style={{ color: C.primary }} /></button>}
+                      </div>
+                    </td>
+                  )}
                   {editable ? (
                     <>
-                      <td className="py-1 pr-2"><input type="date" value={row.date} onChange={(e) => onChange(k, "date", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
-                      <td className="py-1 pr-2 font-medium" style={{ color: C.ink }}>{label}</td>
-                      <td className="py-1 pr-2"><input value={row.day} onChange={(e) => onChange(k, "day", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
+                      <td className="py-1 pr-2"><input type="date" value={row.date} onChange={(e) => onUpdate(k, row.id, "date", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
+                      <td className="py-1 pr-2"><input value={row.day} onChange={(e) => onUpdate(k, row.id, "day", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
                       <td className="py-1 pr-2">
                         <div className="flex items-center gap-1">
-                          <input value={row.result} onChange={(e) => onChange(k, "result", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} />
+                          <input value={row.result} onChange={(e) => onUpdate(k, row.id, "result", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} />
                           <span className="text-[10px] whitespace-nowrap" style={{ color: C.inkFaint }}>{unit}</span>
-                          {panelId && <HighlightDots id={`hormone.${panelId}.${k}`} />}
+                          <HighlightDots id={hid} />
                         </div>
                       </td>
-                      <td className="py-1 pr-2"><input value={row.lab} onChange={(e) => onChange(k, "lab", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} /></td>
+                      <td className="py-1 pr-2">
+                        <div className="flex items-center gap-1">
+                          <input value={row.lab} onChange={(e) => onUpdate(k, row.id, "lab", e.target.value)} className="text-xs rounded px-2 py-1 outline-none w-full" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} />
+                        </div>
+                      </td>
+                      <td className="py-1">{count > 1 && <button type="button" onClick={() => onRemove(k, row.id)}><Trash2 size={13} style={{ color: C.inkFaint }} /></button>}</td>
                     </>
                   ) : (
                     <>
                       <td className="py-2">{fmtDate(row.date)}</td>
-                      <td className="py-2 font-medium" style={{ color: C.ink }}>{label}</td>
                       <td className="py-2">{row.day || "—"}</td>
                       <td className="py-2">
-                        {panelId ? <HormoneResultCell result={row.result} unit={unit} highlightId={`hormone.${panelId}.${k}`} /> : (row.result ? `${row.result} ${unit}` : "—")}
+                        <span className="inline-flex items-center gap-1.5" style={{ color: ctx?.highlights[hid] ? C.brick : C.ink, fontWeight: ctx?.highlights[hid] ? 600 : 400 }}>
+                          <span>{row.result ? `${row.result} ${unit}` : "—"}</span>
+                          <HighlightDots id={hid} />
+                        </span>
                       </td>
                       <td className="py-2">{row.lab || "—"}</td>
                     </>
@@ -1468,18 +1584,41 @@ function PatientForm({ initial, onSave, onCancel }) {
     { key: "plan", label: "Diagnosis & Plan" },
   ];
 
-  const updHormonePanel = (panelId, hormoneKey, field, val) => setData((prev) => ({
+  const addHormoneEntry = (key) => setData((prev) => ({
     ...prev,
-    hormonePanels: prev.hormonePanels.map((entry) => entry.id === panelId
-      ? { ...entry, panel: { ...entry.panel, [hormoneKey]: { ...entry.panel[hormoneKey], [field]: val } } }
-      : entry),
+    hormoneAssays: { ...prev.hormoneAssays, [key]: [...prev.hormoneAssays[key], blankHormoneAssayEntry()] },
   }));
-  const addHormonePanel = () => setData((prev) => (
-    prev.hormonePanels.length >= MAX_HORMONE_PANELS ? prev : { ...prev, hormonePanels: [...prev.hormonePanels, blankHormonePanelEntry()] }
+  const removeHormoneEntry = (key, entryId) => setData((prev) => (
+    prev.hormoneAssays[key].length <= 1 ? prev : {
+      ...prev,
+      hormoneAssays: { ...prev.hormoneAssays, [key]: prev.hormoneAssays[key].filter((e) => e.id !== entryId) },
+    }
   ));
-  const removeHormonePanel = (panelId) => setData((prev) => (
-    prev.hormonePanels.length <= 1 ? prev : { ...prev, hormonePanels: prev.hormonePanels.filter((entry) => entry.id !== panelId) }
-  ));
+  const updHormoneEntry = (key, entryId, field, val) => setData((prev) => ({
+    ...prev,
+    hormoneAssays: {
+      ...prev.hormoneAssays,
+      [key]: prev.hormoneAssays[key].map((e) => e.id === entryId ? { ...e, [field]: val } : e),
+    },
+  }));
+
+  const addTestEntry = (path) => setData((prev) => {
+    const next = _.cloneDeep(prev);
+    _.set(next, path, [..._.get(next, path), blankTestEntry()]);
+    return next;
+  });
+  const removeTestEntry = (path, entryId) => setData((prev) => {
+    const list = _.get(prev, path);
+    if (list.length <= 1) return prev;
+    const next = _.cloneDeep(prev);
+    _.set(next, path, list.filter((e) => e.id !== entryId));
+    return next;
+  });
+  const updTestEntry = (path, entryId, field, val) => setData((prev) => {
+    const next = _.cloneDeep(prev);
+    _.set(next, path, _.get(next, path).map((e) => e.id === entryId ? { ...e, [field]: val } : e));
+    return next;
+  });
 
   const setCycleDate = (cycleId, val) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, date: val } : c) }));
   const addCycleRow = (cycleId) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, rows: [...c.rows, blankCycleRow()] } : c) }));
@@ -1592,8 +1731,10 @@ function PatientForm({ initial, onSave, onCancel }) {
           <div>
             <SectionTitle icon={TestTube2} sub="Wife">Investigations</SectionTitle>
             <div className="grid sm:grid-cols-4 gap-4">
-              <TextField label="Hb" value={data.invest.hb} onChange={(v) => set("invest.hb", v)} highlightId="invest.hb" />
-              <TextField label="Urine" value={data.invest.urine} onChange={(v) => set("invest.urine", v)} highlightId="invest.urine" />
+              <RepeatableTest label="Hb" entries={data.invest.hbEntries} highlightPrefix="invest.hbEntries"
+                onAdd={() => addTestEntry("invest.hbEntries")} onRemove={(id) => removeTestEntry("invest.hbEntries", id)} onUpdate={(id, f, v) => updTestEntry("invest.hbEntries", id, f, v)} />
+              <RepeatableTest label="Urine" entries={data.invest.urineEntries} highlightPrefix="invest.urineEntries"
+                onAdd={() => addTestEntry("invest.urineEntries")} onRemove={(id) => removeTestEntry("invest.urineEntries", id)} onUpdate={(id, f, v) => updTestEntry("invest.urineEntries", id, f, v)} />
               <TextField label="ESR" value={data.invest.esr} onChange={(v) => set("invest.esr", v)} highlightId="invest.esr" />
               <TextField label="Bl. Group" value={data.invest.blGroup} onChange={(v) => set("invest.blGroup", v)} highlightId="invest.blGroup" />
               <div className="col-span-full -mb-1 mt-1">
@@ -1621,19 +1762,9 @@ function PatientForm({ initial, onSave, onCancel }) {
       {tab === "imaging" && (
         <Card className="p-5 flex flex-col gap-6">
           <div>
-            <div className="flex items-center justify-between mb-3">
-              <SectionTitle icon={FlaskConical} sub="Blood / hormone reports — as on the OPD chart">Hormone Assays</SectionTitle>
-              {data.hormonePanels.length < MAX_HORMONE_PANELS && (
-                <Btn size="sm" variant="subtle" icon={Plus} onClick={addHormonePanel}>Add Table</Btn>
-              )}
-            </div>
-            <div className="flex flex-col gap-4">
-              {data.hormonePanels.map((entry, i) => (
-                <HormoneTable key={entry.id} title={`Hormone Assays — Table ${i + 1}`} panel={entry.panel} panelId={entry.id} editable
-                  onChange={(k, f, v) => updHormonePanel(entry.id, k, f, v)}
-                  onRemove={data.hormonePanels.length > 1 ? () => removeHormonePanel(entry.id) : undefined} />
-              ))}
-            </div>
+            <SectionTitle icon={FlaskConical} sub="Blood / hormone reports — as on the OPD chart. Use + next to a marker to add a repeat reading for just that one.">Hormone Assays</SectionTitle>
+            <HormoneAssaySection hormoneAssays={data.hormoneAssays} editable
+              onAdd={addHormoneEntry} onRemove={removeHormoneEntry} onUpdate={updHormoneEntry} />
           </div>
           <div>
             <SectionTitle sub="Imaging & procedures">Laparoscopy · HSG · Hysteroscopy · PCR · CBNAAT</SectionTitle>
@@ -1663,8 +1794,10 @@ function PatientForm({ initial, onSave, onCancel }) {
           <div>
             <SectionTitle icon={TestTube2} sub="Husband — same panel as Wife, minus Rubella / Pap Smear / APLA">Investigations</SectionTitle>
             <div className="grid sm:grid-cols-4 gap-4">
-              <TextField label="Hb" value={data.husband.invest.hb} onChange={(v) => set("husband.invest.hb", v)} highlightId="husband.invest.hb" />
-              <TextField label="Urine" value={data.husband.invest.urine} onChange={(v) => set("husband.invest.urine", v)} highlightId="husband.invest.urine" />
+              <RepeatableTest label="Hb" entries={data.husband.invest.hbEntries} highlightPrefix="husband.invest.hbEntries"
+                onAdd={() => addTestEntry("husband.invest.hbEntries")} onRemove={(id) => removeTestEntry("husband.invest.hbEntries", id)} onUpdate={(id, f, v) => updTestEntry("husband.invest.hbEntries", id, f, v)} />
+              <RepeatableTest label="Urine" entries={data.husband.invest.urineEntries} highlightPrefix="husband.invest.urineEntries"
+                onAdd={() => addTestEntry("husband.invest.urineEntries")} onRemove={(id) => removeTestEntry("husband.invest.urineEntries", id)} onUpdate={(id, f, v) => updTestEntry("husband.invest.urineEntries", id, f, v)} />
               <TextField label="ESR" value={data.husband.invest.esr} onChange={(v) => set("husband.invest.esr", v)} highlightId="husband.invest.esr" />
               <TextField label="Bl. Group" value={data.husband.invest.blGroup} onChange={(v) => set("husband.invest.blGroup", v)} highlightId="husband.invest.blGroup" />
               <div className="col-span-full -mb-1 mt-1">
@@ -1904,12 +2037,16 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
             </dl>
             <SectionTitle icon={TestTube2}>Investigations (Wife)</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm mb-4">
+              <RepeatableTestRow label="Hb" entries={patient.invest.hbEntries} highlightPrefix="invest.hbEntries" />
+              <RepeatableTestRow label="Urine" entries={patient.invest.urineEntries} highlightPrefix="invest.urineEntries" />
               {INVEST_FIELDS.map(([k, label]) => (
                 <HighlightRow key={k} label={label} value={patient.invest[k]} highlightId={`invest.${k}`} />
               ))}
             </dl>
             <SectionTitle icon={TestTube2} sub="Husband">Investigations (Husband)</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm">
+              <RepeatableTestRow label="Hb" entries={patient.husband.invest.hbEntries} highlightPrefix="husband.invest.hbEntries" />
+              <RepeatableTestRow label="Urine" entries={patient.husband.invest.urineEntries} highlightPrefix="husband.invest.urineEntries" />
               {INVEST_FIELDS_HUSBAND.map(([k, label]) => (
                 <HighlightRow key={k} label={label} value={patient.husband.invest[k]} highlightId={`husband.invest.${k}`} />
               ))}
@@ -1946,11 +2083,7 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
               <SectionTitle icon={FlaskConical} sub="Blood / hormone reports — as on the OPD chart">Hormone Assays</SectionTitle>
               <Btn size="sm" variant="ghost" icon={Pencil} onClick={onEdit}>Edit Reports</Btn>
             </div>
-            <div className="flex flex-col gap-4">
-              {patient.hormonePanels.map((entry, i) => (
-                <HormoneTable key={entry.id} title={`Hormone Assays — Table ${i + 1}`} panel={entry.panel} panelId={entry.id} />
-              ))}
-            </div>
+            <HormoneAssaySection hormoneAssays={patient.hormoneAssays} />
           </Card>
           <Card className="p-5 lg:col-span-2">
             <div className="flex items-center justify-between mb-3">
