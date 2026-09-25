@@ -271,20 +271,8 @@ function blankPatient() {
     lmp: "",
     obstetricHistory: "",
     pastFamilyHistory: "",
-    exam: {
-      stature: "", height: "", weight: "", bmi: "",
-      thyroid: "", hirsutism: "", brSecretions: "", secSexChar: "",
-      bp: "", tvs: "", tvsUterus: "", tvsEndometrium: "", tvsCavity: "", tvsRightOvary: "", tvsLeftOvary: "",
-      rs: "", cvs: "",
-    },
-    invest: {
-      hbEntries: [blankTestEntry()], urineEntries: [blankTestEntry()], esr: "", blGroup: "",
-      bslFasting: "", bslPP: "", bslRandom: "",
-      vdrl: "", hiv: "", hbsAg: "",
-      srCreatinine: "", srInsulin: "", homaGlucose: "", homaIR: "",
-      rubella: "", papSmear: "", apla: "",
-      misc: "",
-    },
+    exam: { ...blankEntriesFor(EXAM_FIELDS), bmi: "" },
+    invest: { ...blankEntriesFor(INVEST_FIELDS), homaIR: "" },
     hormoneAssays: blankHormoneAssays(),
     laparoscopy: { date: "", findings: "" },
     hsg: { date: "", findings: "" },
@@ -293,13 +281,7 @@ function blankPatient() {
     cbnaat: { date: "", result: "" },
     husband: {
       habitsHistory: "", genitalExam: "", miscInvestigations: "", semenAnalysis: [],
-      invest: {
-        hbEntries: [blankTestEntry()], urineEntries: [blankTestEntry()], esr: "", blGroup: "",
-        bslFasting: "", bslPP: "", bslRandom: "",
-        vdrl: "", hiv: "", hbsAg: "",
-        srCreatinine: "", srInsulin: "", homaGlucose: "", homaIR: "",
-        misc: "",
-      },
+      invest: { ...blankEntriesFor(INVEST_FIELDS_HUSBAND), homaIR: "" },
     },
     diagnosis: "",
     planOfManagement: "",
@@ -326,11 +308,18 @@ function blankHormoneAssayEntry() {
 function blankHormoneAssays() {
   return _.fromPairs(HORMONE_KEYS.map(([k]) => [k, [blankHormoneAssayEntry()]]));
 }
-/* A single dated reading for a test that's occasionally repeated (Hb,
-   Urine) but doesn't need a full day-of-cycle/lab breakdown like the
-   hormone panel does. */
+/* A single dated reading for any repeatable exam/investigation field —
+   every one of them, from Weight to VDRL, is a small array of these rather
+   than a fixed single value, so a new visit adds a reading instead of
+   overwriting the last one. */
 function blankTestEntry() {
   return { id: uid(), date: "", result: "" };
+}
+/* One blank entry per field in a [key, label, ...] config list, keyed as
+   `${key}Entries` — used to build exam/invest's default shape in
+   blankPatient() without hand-typing every field twice. */
+function blankEntriesFor(fields) {
+  return _.fromPairs(fields.map(([k]) => [`${k}Entries`, [blankTestEntry()]]));
 }
 function blankCycleRow() {
   return { id: uid(), date: "", day: "", e2: "", end: "", rtOv: "", ltOv: "", adv: "" };
@@ -381,25 +370,10 @@ function migrateLegacyShapes(p) {
   }
   delete out.hormonePanels;
 
-  // A single-string Hb/Urine value becomes one dated entry (date left blank
-  // — the original field never recorded one); husband.invest gets the same
-  // treatment via the invest param below.
-  const migrateTestEntries = (invest) => {
-    if (!invest) return invest;
-    const next = { ...invest };
-    if (!Array.isArray(next.hbEntries)) {
-      next.hbEntries = next.hb ? [{ id: uid(), date: "", result: next.hb }] : [blankTestEntry()];
-    }
-    delete next.hb;
-    if (!Array.isArray(next.urineEntries)) {
-      next.urineEntries = next.urine ? [{ id: uid(), date: "", result: next.urine }] : [blankTestEntry()];
-    }
-    delete next.urine;
-    return next;
-  };
-  if (out.invest) out.invest = migrateTestEntries(out.invest);
-  if (out.husband?.invest) out.husband = { ...out.husband, invest: migrateTestEntries(out.husband.invest) };
-
+  // Oldest shape of all: bslType (a category) + bsl (one value) instead of
+  // the three separate Fasting/PP/Random fields. Runs before the generic
+  // entries migration below so bslFasting/bslPP/bslRandom already hold a
+  // plain value (if any) by the time that converts every field to entries.
   const migrateBSL = (invest) => {
     if (!invest || (invest.bslType === undefined && invest.bsl === undefined)) return invest;
     if (invest.bslFasting !== undefined || invest.bslPP !== undefined || invest.bslRandom !== undefined) return invest;
@@ -418,6 +392,25 @@ function migrateLegacyShapes(p) {
   if (out.invest) out.invest = migrateBSL(out.invest);
   if (out.husband?.invest) out.husband = { ...out.husband, invest: migrateBSL(out.husband.invest) };
 
+  // Generic: any field in a [key, label, ...] config still holding a plain
+  // value (old shape) becomes one dated entry (date left blank — the old
+  // single-value fields never recorded one) instead of a fixed value.
+  const migrateEntries = (obj, fields) => {
+    if (!obj) return obj;
+    const next = { ...obj };
+    fields.forEach(([k]) => {
+      const entriesKey = `${k}Entries`;
+      if (!Array.isArray(next[entriesKey])) {
+        next[entriesKey] = next[k] ? [{ id: uid(), date: "", result: next[k] }] : [blankTestEntry()];
+      }
+      delete next[k];
+    });
+    return next;
+  };
+  if (out.exam) out.exam = migrateEntries(out.exam, EXAM_FIELDS);
+  if (out.invest) out.invest = migrateEntries(out.invest, INVEST_FIELDS);
+  if (out.husband?.invest) out.husband = { ...out.husband, invest: migrateEntries(out.husband.invest, INVEST_FIELDS_HUSBAND) };
+
   return out;
 }
 
@@ -435,30 +428,9 @@ function normalizePatient(p) {
   });
 }
 
-const EXAM_FIELDS = [
-  ["stature", "Stature"], ["height", "Height (cm)"], ["weight", "Weight (kg)"], ["bmi", "BMI"],
-  ["thyroid", "Thyroid"], ["hirsutism", "Hirsutism"], ["brSecretions", "Br. Secretions"], ["secSexChar", "Sec. Sex Characters"],
-  ["bp", "B.P."], ["tvs", "TVS"],
-  ["tvsUterus", "TVS — Uterus"], ["tvsEndometrium", "TVS — Endometrium"], ["tvsCavity", "TVS — Cavity"],
-  ["tvsRightOvary", "TVS — Right Ovary"], ["tvsLeftOvary", "TVS — Left Ovary"],
-  ["rs", "R.S."], ["cvs", "C.V.S."],
-];
-/* Hb and Urine are repeatable dated tests (hbEntries/urineEntries) shown
-   via their own section, not this fixed single-value list — see
-   RepeatableTest in the form and RepeatableTestRow in Overview. */
-const INVEST_FIELDS = [
-  ["esr", "ESR"], ["blGroup", "Bl. Group"],
-  ["bslFasting", "BSL — Fasting Sugar"], ["bslPP", "BSL — PP Sugar"], ["bslRandom", "BSL — Random Sugar"],
-  ["vdrl", "VDRL"], ["hiv", "HIV"], ["hbsAg", "HBs Ag"],
-  ["srCreatinine", "Sr. Creatinine"], ["srInsulin", "Sr. Insulin"],
-  ["homaGlucose", "Fasting Glucose (HOMA-IR)"], ["homaIR", "HOMA-IR"],
-  ["rubella", "Rubella"], ["papSmear", "Pap Smear"], ["apla", "APLA"],
-  ["misc", "Misc."],
-];
-/* Husband's Investigations panel mirrors the wife's, minus the three
-   wife-specific tests (Rubella, Pap Smear, APLA). Derived by filtering
-   rather than duplicated, so the two never drift apart. */
-const INVEST_FIELDS_HUSBAND = INVEST_FIELDS.filter(([k]) => !["rubella", "papSmear", "apla"].includes(k));
+// EXAM_FIELDS / INVEST_FIELDS / INVEST_FIELDS_HUSBAND are defined further
+// down (after the option-list constants they reference, e.g.
+// PRESENT_ABSENT_OPTIONS) — see below NORMAL_ABNORMAL_OPTIONS.
 
 /* Groups consecutive medicine rows that share a drug name, so the same drug
    prescribed at several doses (e.g. a tapering schedule) is shown/printed
@@ -507,9 +479,18 @@ function highlightableFields(patient) {
     { id: "lmp", label: "LMP", value: patient.lmp },
     { id: "obstetricHistory", label: "Obstetric History", value: patient.obstetricHistory },
     { id: "pastFamilyHistory", label: "Past/Family History", value: patient.pastFamilyHistory },
-    ...EXAM_FIELDS.map(([k, label]) => ({ id: `exam.${k}`, label: `Exam — ${label}`, value: patient.exam[k] })),
-    ...INVEST_FIELDS.map(([k, label]) => ({ id: `invest.${k}`, label: `Investigation (Wife) — ${label}`, value: patient.invest[k] })),
-    ...INVEST_FIELDS_HUSBAND.map(([k, label]) => ({ id: `husband.invest.${k}`, label: `Investigation (Husband) — ${label}`, value: patient.husband.invest[k] })),
+    ...EXAM_FIELDS.flatMap(([k, label]) => {
+      const entries = patient.exam[`${k}Entries`] || [];
+      return entries.map((e, i) => ({ id: `exam.${k}Entries.${e.id}`, label: `Exam — ${label}${entries.length > 1 ? ` #${i + 1}` : ""}`, value: e.result }));
+    }),
+    ...INVEST_FIELDS.flatMap(([k, label]) => {
+      const entries = patient.invest[`${k}Entries`] || [];
+      return entries.map((e, i) => ({ id: `invest.${k}Entries.${e.id}`, label: `Investigation (Wife) — ${label}${entries.length > 1 ? ` #${i + 1}` : ""}`, value: e.result }));
+    }),
+    ...INVEST_FIELDS_HUSBAND.flatMap(([k, label]) => {
+      const entries = patient.husband.invest[`${k}Entries`] || [];
+      return entries.map((e, i) => ({ id: `husband.invest.${k}Entries.${e.id}`, label: `Investigation (Husband) — ${label}${entries.length > 1 ? ` #${i + 1}` : ""}`, value: e.result }));
+    }),
     { id: "diagnosis", label: "Diagnosis", value: patient.diagnosis },
     { id: "planOfManagement", label: "Plan of Management", value: patient.planOfManagement },
     { id: "laparoscopy.findings", label: "Laparoscopy", value: patient.laparoscopy.findings },
@@ -531,26 +512,6 @@ function highlightableFields(patient) {
         value: entry.result ? `${entry.result} ${unit}` : "",
       }))
     ),
-    ...(patient.invest.hbEntries || []).map((entry, i) => ({
-      id: `invest.hbEntries.${entry.id}`,
-      label: `Hb (Wife)${patient.invest.hbEntries.length > 1 ? ` #${i + 1}` : ""}`,
-      value: entry.result,
-    })),
-    ...(patient.invest.urineEntries || []).map((entry, i) => ({
-      id: `invest.urineEntries.${entry.id}`,
-      label: `Urine (Wife)${patient.invest.urineEntries.length > 1 ? ` #${i + 1}` : ""}`,
-      value: entry.result,
-    })),
-    ...(patient.husband.invest.hbEntries || []).map((entry, i) => ({
-      id: `husband.invest.hbEntries.${entry.id}`,
-      label: `Hb (Husband)${patient.husband.invest.hbEntries.length > 1 ? ` #${i + 1}` : ""}`,
-      value: entry.result,
-    })),
-    ...(patient.husband.invest.urineEntries || []).map((entry, i) => ({
-      id: `husband.invest.urineEntries.${entry.id}`,
-      label: `Urine (Husband)${patient.husband.invest.urineEntries.length > 1 ? ` #${i + 1}` : ""}`,
-      value: entry.result,
-    })),
   ];
 }
 
@@ -562,6 +523,44 @@ const TYPE_INFERTILITY_OPTIONS = ["Primary", "Secondary", "Secondary with BOH"];
 const MENSTRUAL_HISTORY_OPTIONS = ["Regular", "Irregular"];
 const PRESENT_ABSENT_OPTIONS = ["Present", "Absent"];
 const NORMAL_ABNORMAL_OPTIONS = ["Normal", "Abnormal"];
+
+/* Every exam/investigation field is a repeatable, dated series (see
+   blankTestEntry/RepeatableTest) — vitals and labs change from visit to
+   visit, and a new reading is added rather than overwriting the last one.
+   Tuple: [key, label, options?, suffix?]. `key` maps to `${key}Entries` on
+   the patient record; `options` renders a dropdown result instead of free
+   text; `suffix` shows a fixed unit next to the result (e.g. "mm/Hg"). BMI
+   and HOMA-IR aren't listed — they're computed from the latest
+   height/weight and Sr. Insulin/Fasting Glucose entries respectively. */
+const EXAM_FIELDS = [
+  ["stature", "Stature"], ["height", "Height (cm)"], ["weight", "Weight (kg)"],
+  ["thyroid", "Thyroid", PRESENT_ABSENT_OPTIONS], ["hirsutism", "Hirsutism", PRESENT_ABSENT_OPTIONS],
+  ["brSecretions", "Br. Secretions", PRESENT_ABSENT_OPTIONS], ["secSexChar", "Sec. Sex Characters", NORMAL_ABNORMAL_OPTIONS],
+  ["bp", "B.P.", null, "mm/Hg"], ["tvs", "TVS"],
+  ["tvsUterus", "TVS — Uterus"], ["tvsEndometrium", "TVS — Endometrium"], ["tvsCavity", "TVS — Cavity"],
+  ["tvsRightOvary", "TVS — Right Ovary"], ["tvsLeftOvary", "TVS — Left Ovary"],
+  ["rs", "R.S."], ["cvs", "C.V.S."],
+];
+const INVEST_FIELDS = [
+  ["hb", "Hb"], ["urine", "Urine"], ["esr", "ESR"], ["blGroup", "Bl. Group"],
+  ["bslFasting", "BSL — Fasting Sugar"], ["bslPP", "BSL — PP Sugar"], ["bslRandom", "BSL — Random Sugar"],
+  ["vdrl", "VDRL"], ["hiv", "HIV"], ["hbsAg", "HBs Ag"],
+  ["srCreatinine", "Sr. Creatinine"], ["srInsulin", "Sr. Insulin"],
+  ["homaGlucose", "Fasting Glucose (HOMA-IR)"],
+  ["rubella", "Rubella"], ["papSmear", "Pap Smear"], ["apla", "APLA"],
+  ["misc", "Misc."],
+];
+/* Husband's Investigations panel mirrors the wife's, minus the three
+   wife-specific tests (Rubella, Pap Smear, APLA). Derived by filtering
+   rather than duplicated, so the two never drift apart. */
+const INVEST_FIELDS_HUSBAND = INVEST_FIELDS.filter(([k]) => !["rubella", "papSmear", "apla"].includes(k));
+/* Latest (last-added) entry's result for a repeatable field — used to
+   compute BMI/HOMA-IR from whichever height/weight/Sr. Insulin/Fasting
+   Glucose reading was most recently entered. */
+function lastEntryResult(entries) {
+  return entries?.length ? entries[entries.length - 1].result : "";
+}
+
 const HORMONE_KEYS = [
   ["fsh", "FSH", "mIU/ml"], ["lh", "L.H.", "mIU/ml"], ["prolactin", "Prolactin", "ng/ml"],
   ["tsh", "TSH", "uIU/ml"], ["t4", "T4", "mcg/dl"], ["amh", "AMH", "ng/nl"],
@@ -682,25 +681,6 @@ function SelectField({ label, value, onChange, options, full, placeholder, highl
         {placeholder && !value && <option value="" disabled>{placeholder}</option>}
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
       </select>
-    </label>
-  );
-}
-/* Text input with a fixed, non-editable unit suffix (e.g. "mm/Hg" for B.P.) */
-function TextFieldWithSuffix({ label, value, onChange, suffix, placeholder, highlightId }) {
-  const h = useHighlight(highlightId);
-  return (
-    <label className="flex flex-col gap-1">
-      <FieldLabel label={label} highlightId={highlightId} />
-      <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff", ...highlightFieldStyle(h) }}>
-        <input
-          value={value || ""}
-          placeholder={placeholder}
-          onChange={(e) => onChange(e.target.value)}
-          className="flex-1 text-sm outline-none min-w-0"
-          style={{ color: C.ink, background: "transparent" }}
-        />
-        <span className="text-xs whitespace-nowrap" style={{ color: C.inkFaint }}>{suffix}</span>
-      </div>
     </label>
   );
 }
@@ -941,7 +921,7 @@ function HighlightRow({ label, value, highlightId, alwaysShow }) {
 /* A test that's occasionally repeated (Hb, Urine) — starts as one dated
    entry; "+" adds another entry for just this test when it needs
    re-checking, instead of duplicating the whole investigations panel. */
-function RepeatableTest({ label, entries, onAdd, onRemove, onUpdate, highlightPrefix }) {
+function RepeatableTest({ label, entries, onAdd, onRemove, onUpdate, highlightPrefix, options, suffix }) {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between">
@@ -954,8 +934,17 @@ function RepeatableTest({ label, entries, onAdd, onRemove, onUpdate, highlightPr
         <div key={e.id} className="flex items-center gap-1.5">
           <input type="date" value={e.date} onChange={(ev) => onUpdate(e.id, "date", ev.target.value)}
             className="text-xs rounded px-2 py-1.5 outline-none shrink-0" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff", width: 118 }} />
-          <input value={e.result} onChange={(ev) => onUpdate(e.id, "result", ev.target.value)} placeholder={label}
-            className="text-xs rounded px-2 py-1.5 outline-none flex-1 min-w-0" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} />
+          {options ? (
+            <select value={e.result} onChange={(ev) => onUpdate(e.id, "result", ev.target.value)}
+              className="text-xs rounded px-2 py-1.5 outline-none flex-1 min-w-0" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }}>
+              <option value="">Select…</option>
+              {options.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          ) : (
+            <input value={e.result} onChange={(ev) => onUpdate(e.id, "result", ev.target.value)} placeholder={label}
+              className="text-xs rounded px-2 py-1.5 outline-none flex-1 min-w-0" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} />
+          )}
+          {suffix && <span className="text-xs whitespace-nowrap" style={{ color: C.inkFaint }}>{suffix}</span>}
           <HighlightDots id={`${highlightPrefix}.${e.id}`} />
           {entries.length > 1 && <button type="button" onClick={() => onRemove(e.id)}><Trash2 size={13} style={{ color: C.inkFaint }} /></button>}
         </div>
@@ -1557,22 +1546,48 @@ function PatientForm({ initial, onSave, onCancel }) {
     return { ...prev, highlights };
   });
 
+  const addTestEntry = (path) => setData((prev) => {
+    const next = _.cloneDeep(prev);
+    _.set(next, path, [..._.get(next, path), blankTestEntry()]);
+    return next;
+  });
+  const removeTestEntry = (path, entryId) => setData((prev) => {
+    const list = _.get(prev, path);
+    if (list.length <= 1) return prev;
+    const next = _.cloneDeep(prev);
+    _.set(next, path, list.filter((e) => e.id !== entryId));
+    return next;
+  });
+  const updTestEntry = (path, entryId, field, val) => setData((prev) => {
+    const next = _.cloneDeep(prev);
+    _.set(next, path, _.get(next, path).map((e) => e.id === entryId ? { ...e, [field]: val } : e));
+    return next;
+  });
+
   // Height/weight and Sr. Insulin/Fasting Glucose drive the auto-calculated
-  // BMI and HOMA-IR fields, so their setters recompute the derived value in
-  // the same update rather than leaving it to go stale until the next edit.
-  const setExamMeasure = (field, val) => setData((prev) => {
-    const next = _.set(_.cloneDeep(prev), `exam.${field}`, val);
-    next.exam.bmi = calcBMI(next.exam.height, next.exam.weight);
+  // BMI and HOMA-IR fields — both computed off whichever reading was most
+  // recently added (see lastEntryResult) — so their entry updaters
+  // recompute the derived value in the same update rather than leaving it
+  // to go stale until the next edit.
+  const updExamEntry = (fieldKey, entryId, field, val) => setData((prev) => {
+    const next = _.cloneDeep(prev);
+    const path = `exam.${fieldKey}Entries`;
+    _.set(next, path, _.get(next, path).map((e) => e.id === entryId ? { ...e, [field]: val } : e));
+    next.exam.bmi = calcBMI(lastEntryResult(next.exam.heightEntries), lastEntryResult(next.exam.weightEntries));
     return next;
   });
-  const setWifeHoma = (field, val) => setData((prev) => {
-    const next = _.set(_.cloneDeep(prev), `invest.${field}`, val);
-    next.invest.homaIR = calcHOMAIR(next.invest.srInsulin, next.invest.homaGlucose);
+  const updWifeInvestEntry = (fieldKey, entryId, field, val) => setData((prev) => {
+    const next = _.cloneDeep(prev);
+    const path = `invest.${fieldKey}Entries`;
+    _.set(next, path, _.get(next, path).map((e) => e.id === entryId ? { ...e, [field]: val } : e));
+    next.invest.homaIR = calcHOMAIR(lastEntryResult(next.invest.srInsulinEntries), lastEntryResult(next.invest.homaGlucoseEntries));
     return next;
   });
-  const setHusbandHoma = (field, val) => setData((prev) => {
-    const next = _.set(_.cloneDeep(prev), `husband.invest.${field}`, val);
-    next.husband.invest.homaIR = calcHOMAIR(next.husband.invest.srInsulin, next.husband.invest.homaGlucose);
+  const updHusbandInvestEntry = (fieldKey, entryId, field, val) => setData((prev) => {
+    const next = _.cloneDeep(prev);
+    const path = `husband.invest.${fieldKey}Entries`;
+    _.set(next, path, _.get(next, path).map((e) => e.id === entryId ? { ...e, [field]: val } : e));
+    next.husband.invest.homaIR = calcHOMAIR(lastEntryResult(next.husband.invest.srInsulinEntries), lastEntryResult(next.husband.invest.homaGlucoseEntries));
     return next;
   });
 
@@ -1601,24 +1616,6 @@ function PatientForm({ initial, onSave, onCancel }) {
       [key]: prev.hormoneAssays[key].map((e) => e.id === entryId ? { ...e, [field]: val } : e),
     },
   }));
-
-  const addTestEntry = (path) => setData((prev) => {
-    const next = _.cloneDeep(prev);
-    _.set(next, path, [..._.get(next, path), blankTestEntry()]);
-    return next;
-  });
-  const removeTestEntry = (path, entryId) => setData((prev) => {
-    const list = _.get(prev, path);
-    if (list.length <= 1) return prev;
-    const next = _.cloneDeep(prev);
-    _.set(next, path, list.filter((e) => e.id !== entryId));
-    return next;
-  });
-  const updTestEntry = (path, entryId, field, val) => setData((prev) => {
-    const next = _.cloneDeep(prev);
-    _.set(next, path, _.get(next, path).map((e) => e.id === entryId ? { ...e, [field]: val } : e));
-    return next;
-  });
 
   const setCycleDate = (cycleId, val) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, date: val } : c) }));
   const addCycleRow = (cycleId) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, rows: [...c.rows, blankCycleRow()] } : c) }));
@@ -1709,51 +1706,36 @@ function PatientForm({ initial, onSave, onCancel }) {
           <div>
             <SectionTitle icon={Stethoscope} sub="Wife">Examination</SectionTitle>
             <div className="grid sm:grid-cols-4 gap-4">
-              <TextField label="Stature" value={data.exam.stature} onChange={(v) => set("exam.stature", v)} highlightId="exam.stature" />
-              <TextField label="Height (cm)" value={data.exam.height} onChange={(v) => setExamMeasure("height", v)} highlightId="exam.height" />
-              <TextField label="Weight (kg)" value={data.exam.weight} onChange={(v) => setExamMeasure("weight", v)} highlightId="exam.weight" />
-              <BMIField value={data.exam.bmi} />
-              <SelectField label="Thyroid" value={data.exam.thyroid} onChange={(v) => set("exam.thyroid", v)} options={PRESENT_ABSENT_OPTIONS} placeholder="Select…" highlightId="exam.thyroid" />
-              <SelectField label="Hirsutism" value={data.exam.hirsutism} onChange={(v) => set("exam.hirsutism", v)} options={PRESENT_ABSENT_OPTIONS} placeholder="Select…" highlightId="exam.hirsutism" />
-              <SelectField label="Br. Secretions" value={data.exam.brSecretions} onChange={(v) => set("exam.brSecretions", v)} options={PRESENT_ABSENT_OPTIONS} placeholder="Select…" highlightId="exam.brSecretions" />
-              <SelectField label="Sec. Sex Characters" value={data.exam.secSexChar} onChange={(v) => set("exam.secSexChar", v)} options={NORMAL_ABNORMAL_OPTIONS} placeholder="Select…" highlightId="exam.secSexChar" />
-              <TextFieldWithSuffix label="B.P." value={data.exam.bp} onChange={(v) => set("exam.bp", v)} suffix="mm/Hg" placeholder="120/80" highlightId="exam.bp" />
-              <TextField label="TVS" value={data.exam.tvs} onChange={(v) => set("exam.tvs", v)} highlightId="exam.tvs" />
-              <TextField label="TVS — Uterus" value={data.exam.tvsUterus} onChange={(v) => set("exam.tvsUterus", v)} highlightId="exam.tvsUterus" />
-              <TextField label="TVS — Endometrium" value={data.exam.tvsEndometrium} onChange={(v) => set("exam.tvsEndometrium", v)} highlightId="exam.tvsEndometrium" />
-              <TextField label="TVS — Cavity" value={data.exam.tvsCavity} onChange={(v) => set("exam.tvsCavity", v)} highlightId="exam.tvsCavity" />
-              <TextField label="TVS — Right Ovary" value={data.exam.tvsRightOvary} onChange={(v) => set("exam.tvsRightOvary", v)} highlightId="exam.tvsRightOvary" />
-              <TextField label="TVS — Left Ovary" value={data.exam.tvsLeftOvary} onChange={(v) => set("exam.tvsLeftOvary", v)} highlightId="exam.tvsLeftOvary" />
-              <TextField label="R.S." value={data.exam.rs} onChange={(v) => set("exam.rs", v)} highlightId="exam.rs" />
-              <TextField label="C.V.S." value={data.exam.cvs} onChange={(v) => set("exam.cvs", v)} highlightId="exam.cvs" />
+              {EXAM_FIELDS.map(([k, label, options, suffix]) => (
+                <Fragment key={k}>
+                  <RepeatableTest label={label} entries={data.exam[`${k}Entries`]} highlightPrefix={`exam.${k}Entries`}
+                    options={options} suffix={suffix}
+                    onAdd={() => addTestEntry(`exam.${k}Entries`)}
+                    onRemove={(id) => removeTestEntry(`exam.${k}Entries`, id)}
+                    onUpdate={(id, f, v) => updExamEntry(k, id, f, v)} />
+                  {k === "weight" && <BMIField value={data.exam.bmi} />}
+                </Fragment>
+              ))}
             </div>
           </div>
           <div>
             <SectionTitle icon={TestTube2} sub="Wife">Investigations</SectionTitle>
             <div className="grid sm:grid-cols-4 gap-4">
-              <RepeatableTest label="Hb" entries={data.invest.hbEntries} highlightPrefix="invest.hbEntries"
-                onAdd={() => addTestEntry("invest.hbEntries")} onRemove={(id) => removeTestEntry("invest.hbEntries", id)} onUpdate={(id, f, v) => updTestEntry("invest.hbEntries", id, f, v)} />
-              <RepeatableTest label="Urine" entries={data.invest.urineEntries} highlightPrefix="invest.urineEntries"
-                onAdd={() => addTestEntry("invest.urineEntries")} onRemove={(id) => removeTestEntry("invest.urineEntries", id)} onUpdate={(id, f, v) => updTestEntry("invest.urineEntries", id, f, v)} />
-              <TextField label="ESR" value={data.invest.esr} onChange={(v) => set("invest.esr", v)} highlightId="invest.esr" />
-              <TextField label="Bl. Group" value={data.invest.blGroup} onChange={(v) => set("invest.blGroup", v)} highlightId="invest.blGroup" />
-              <div className="col-span-full -mb-1 mt-1">
-                <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>BSL</p>
-              </div>
-              <TextField label="Fasting Sugar (mg/dL)" value={data.invest.bslFasting} onChange={(v) => set("invest.bslFasting", v)} highlightId="invest.bslFasting" />
-              <TextField label="PP Sugar (mg/dL)" value={data.invest.bslPP} onChange={(v) => set("invest.bslPP", v)} highlightId="invest.bslPP" />
-              <TextField label="Random Sugar (mg/dL)" value={data.invest.bslRandom} onChange={(v) => set("invest.bslRandom", v)} highlightId="invest.bslRandom" />
-              <TextField label="VDRL" value={data.invest.vdrl} onChange={(v) => set("invest.vdrl", v)} highlightId="invest.vdrl" />
-              <TextField label="HIV" value={data.invest.hiv} onChange={(v) => set("invest.hiv", v)} highlightId="invest.hiv" />
-              <TextField label="HBs Ag" value={data.invest.hbsAg} onChange={(v) => set("invest.hbsAg", v)} highlightId="invest.hbsAg" />
-              <TextField label="Sr. Creatinine" value={data.invest.srCreatinine} onChange={(v) => set("invest.srCreatinine", v)} highlightId="invest.srCreatinine" />
-              <TextField label="Sr. Insulin" value={data.invest.srInsulin} onChange={(v) => setWifeHoma("srInsulin", v)} highlightId="invest.srInsulin" />
-              <TextField label="Fasting Glucose (for HOMA-IR)" value={data.invest.homaGlucose} onChange={(v) => setWifeHoma("homaGlucose", v)} highlightId="invest.homaGlucose" />
-              <HomaIRField value={data.invest.homaIR} />
-              <TextField label="Rubella" value={data.invest.rubella} onChange={(v) => set("invest.rubella", v)} highlightId="invest.rubella" />
-              <TextField label="Pap Smear" value={data.invest.papSmear} onChange={(v) => set("invest.papSmear", v)} highlightId="invest.papSmear" />
-              <TextField label="APLA" value={data.invest.apla} onChange={(v) => set("invest.apla", v)} highlightId="invest.apla" />
-              <TextField label="Misc." value={data.invest.misc} onChange={(v) => set("invest.misc", v)} highlightId="invest.misc" />
+              {INVEST_FIELDS.map(([k, label, options, suffix]) => (
+                <Fragment key={k}>
+                  {k === "bslFasting" && (
+                    <div className="col-span-full -mb-1 mt-1">
+                      <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>BSL</p>
+                    </div>
+                  )}
+                  <RepeatableTest label={label} entries={data.invest[`${k}Entries`]} highlightPrefix={`invest.${k}Entries`}
+                    options={options} suffix={suffix}
+                    onAdd={() => addTestEntry(`invest.${k}Entries`)}
+                    onRemove={(id) => removeTestEntry(`invest.${k}Entries`, id)}
+                    onUpdate={(id, f, v) => updWifeInvestEntry(k, id, f, v)} />
+                  {k === "homaGlucose" && <HomaIRField value={data.invest.homaIR} />}
+                </Fragment>
+              ))}
             </div>
           </div>
         </Card>
@@ -1794,26 +1776,21 @@ function PatientForm({ initial, onSave, onCancel }) {
           <div>
             <SectionTitle icon={TestTube2} sub="Husband — same panel as Wife, minus Rubella / Pap Smear / APLA">Investigations</SectionTitle>
             <div className="grid sm:grid-cols-4 gap-4">
-              <RepeatableTest label="Hb" entries={data.husband.invest.hbEntries} highlightPrefix="husband.invest.hbEntries"
-                onAdd={() => addTestEntry("husband.invest.hbEntries")} onRemove={(id) => removeTestEntry("husband.invest.hbEntries", id)} onUpdate={(id, f, v) => updTestEntry("husband.invest.hbEntries", id, f, v)} />
-              <RepeatableTest label="Urine" entries={data.husband.invest.urineEntries} highlightPrefix="husband.invest.urineEntries"
-                onAdd={() => addTestEntry("husband.invest.urineEntries")} onRemove={(id) => removeTestEntry("husband.invest.urineEntries", id)} onUpdate={(id, f, v) => updTestEntry("husband.invest.urineEntries", id, f, v)} />
-              <TextField label="ESR" value={data.husband.invest.esr} onChange={(v) => set("husband.invest.esr", v)} highlightId="husband.invest.esr" />
-              <TextField label="Bl. Group" value={data.husband.invest.blGroup} onChange={(v) => set("husband.invest.blGroup", v)} highlightId="husband.invest.blGroup" />
-              <div className="col-span-full -mb-1 mt-1">
-                <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>BSL</p>
-              </div>
-              <TextField label="Fasting Sugar (mg/dL)" value={data.husband.invest.bslFasting} onChange={(v) => set("husband.invest.bslFasting", v)} highlightId="husband.invest.bslFasting" />
-              <TextField label="PP Sugar (mg/dL)" value={data.husband.invest.bslPP} onChange={(v) => set("husband.invest.bslPP", v)} highlightId="husband.invest.bslPP" />
-              <TextField label="Random Sugar (mg/dL)" value={data.husband.invest.bslRandom} onChange={(v) => set("husband.invest.bslRandom", v)} highlightId="husband.invest.bslRandom" />
-              <TextField label="VDRL" value={data.husband.invest.vdrl} onChange={(v) => set("husband.invest.vdrl", v)} highlightId="husband.invest.vdrl" />
-              <TextField label="HIV" value={data.husband.invest.hiv} onChange={(v) => set("husband.invest.hiv", v)} highlightId="husband.invest.hiv" />
-              <TextField label="HBs Ag" value={data.husband.invest.hbsAg} onChange={(v) => set("husband.invest.hbsAg", v)} highlightId="husband.invest.hbsAg" />
-              <TextField label="Sr. Creatinine" value={data.husband.invest.srCreatinine} onChange={(v) => set("husband.invest.srCreatinine", v)} highlightId="husband.invest.srCreatinine" />
-              <TextField label="Sr. Insulin" value={data.husband.invest.srInsulin} onChange={(v) => setHusbandHoma("srInsulin", v)} highlightId="husband.invest.srInsulin" />
-              <TextField label="Fasting Glucose (for HOMA-IR)" value={data.husband.invest.homaGlucose} onChange={(v) => setHusbandHoma("homaGlucose", v)} highlightId="husband.invest.homaGlucose" />
-              <HomaIRField value={data.husband.invest.homaIR} />
-              <TextField label="Misc." value={data.husband.invest.misc} onChange={(v) => set("husband.invest.misc", v)} highlightId="husband.invest.misc" />
+              {INVEST_FIELDS_HUSBAND.map(([k, label, options, suffix]) => (
+                <Fragment key={k}>
+                  {k === "bslFasting" && (
+                    <div className="col-span-full -mb-1 mt-1">
+                      <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: C.inkFaint }}>BSL</p>
+                    </div>
+                  )}
+                  <RepeatableTest label={label} entries={data.husband.invest[`${k}Entries`]} highlightPrefix={`husband.invest.${k}Entries`}
+                    options={options} suffix={suffix}
+                    onAdd={() => addTestEntry(`husband.invest.${k}Entries`)}
+                    onRemove={(id) => removeTestEntry(`husband.invest.${k}Entries`, id)}
+                    onUpdate={(id, f, v) => updHusbandInvestEntry(k, id, f, v)} />
+                  {k === "homaGlucose" && <HomaIRField value={data.husband.invest.homaIR} />}
+                </Fragment>
+              ))}
             </div>
           </div>
           <div>
@@ -2032,24 +2009,23 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
             <SectionTitle icon={Stethoscope}>Examination (Wife)</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm mb-4">
               {EXAM_FIELDS.map(([k, label]) => (
-                <HighlightRow key={k} label={label} value={patient.exam[k]} highlightId={`exam.${k}`} />
+                <RepeatableTestRow key={k} label={label} entries={patient.exam[`${k}Entries`]} highlightPrefix={`exam.${k}Entries`} />
               ))}
+              <HighlightRow label="BMI" value={patient.exam.bmi} />
             </dl>
             <SectionTitle icon={TestTube2}>Investigations (Wife)</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm mb-4">
-              <RepeatableTestRow label="Hb" entries={patient.invest.hbEntries} highlightPrefix="invest.hbEntries" />
-              <RepeatableTestRow label="Urine" entries={patient.invest.urineEntries} highlightPrefix="invest.urineEntries" />
               {INVEST_FIELDS.map(([k, label]) => (
-                <HighlightRow key={k} label={label} value={patient.invest[k]} highlightId={`invest.${k}`} />
+                <RepeatableTestRow key={k} label={label} entries={patient.invest[`${k}Entries`]} highlightPrefix={`invest.${k}Entries`} />
               ))}
+              <HighlightRow label="HOMA-IR" value={patient.invest.homaIR} />
             </dl>
             <SectionTitle icon={TestTube2} sub="Husband">Investigations (Husband)</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm">
-              <RepeatableTestRow label="Hb" entries={patient.husband.invest.hbEntries} highlightPrefix="husband.invest.hbEntries" />
-              <RepeatableTestRow label="Urine" entries={patient.husband.invest.urineEntries} highlightPrefix="husband.invest.urineEntries" />
               {INVEST_FIELDS_HUSBAND.map(([k, label]) => (
-                <HighlightRow key={k} label={label} value={patient.husband.invest[k]} highlightId={`husband.invest.${k}`} />
+                <RepeatableTestRow key={k} label={label} entries={patient.husband.invest[`${k}Entries`]} highlightPrefix={`husband.invest.${k}Entries`} />
               ))}
+              <HighlightRow label="HOMA-IR" value={patient.husband.invest.homaIR} />
             </dl>
           </Card>
           <Card className="p-5 lg:col-span-2">
