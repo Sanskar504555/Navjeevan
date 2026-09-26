@@ -1966,7 +1966,7 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
       )}
 
       <div className="flex gap-1 overflow-x-auto emr-scroll border-b no-print" style={{ borderColor: C.border }}>
-        {[["overview", "Overview"], ["reports", "Reports"], ["prescriptions", "Prescriptions"], ["cycles", "IUI / IVF Cycles"], ["files", "Files"]].map(([k, label]) => (
+        {[["overview", "Overview"], ["prescriptions", "Prescriptions"], ["reports", "Reports"], ["cycles", "IUI / IVF Cycles"], ["files", "Files"]].map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)} className="px-4 py-2.5 text-sm font-medium whitespace-nowrap"
             style={{ color: tab === k ? C.primary : C.inkFaint, borderBottom: tab === k ? `2px solid ${C.primary}` : "2px solid transparent" }}>
             {label}
