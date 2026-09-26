@@ -2698,6 +2698,14 @@ export default function App() {
 
   const savePatient = async (data) => {
     const exists = patients.some((p) => p.id === data.id);
+    const fileNo = (data.fileNo || "").trim();
+    if (fileNo) {
+      const dup = patients.find((p) => p.id !== data.id && (p.fileNo || "").trim().toLowerCase() === fileNo.toLowerCase());
+      if (dup) {
+        showToast(`Patient already registered with File No. ${fileNo} (${dup.patientName || "unnamed"}). Open their record and use Edit instead.`, "error");
+        return;
+      }
+    }
     if (IS_WEB) {
       try {
         data = exists ? await updatePatientRemote(data.id, data) : await createPatientRemote(data);
