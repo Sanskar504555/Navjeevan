@@ -1532,9 +1532,19 @@ function PatientsList({ patients, openPatient, setView, deletePatient }) {
 /* ---------------------------------------------------------------------
    Patient Form (register / edit)
 --------------------------------------------------------------------- */
-function PatientForm({ initial, onSave, onCancel }) {
+function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave, onCancel }) {
   const [data, setData] = useState(() => normalizePatient(initial));
   const [tab, setTab] = useState("basic");
+  // Prescriptions added/edited/removed while filling out this form are only
+  // queued here, not persisted — a prescription's patientId must reference
+  // an existing Patient row on the server, so they're only actually
+  // created/updated/deleted once "Save Patient" below has saved the patient
+  // itself (see App's savePatient, which reconciles this against
+  // existingPrescriptions).
+  const [pendingRx, setPendingRx] = useState(existingPrescriptions);
+  const addRx = (rx) => setPendingRx((prev) => [...prev, { ...rx, patientId: data.id }]);
+  const updateRx = (rx) => setPendingRx((prev) => prev.map((r) => (r.id === rx.id ? { ...rx, patientId: data.id } : r)));
+  const deleteRx = (id) => setPendingRx((prev) => prev.filter((r) => r.id !== id));
   const set = (path, val) => setData((prev) => _.set(_.cloneDeep(prev), path, val));
   // Highlight ids are flat keys (some containing dots, e.g. "exam.bmi") into
   // data.highlights — set directly rather than through set()/_.set, which
@@ -1597,6 +1607,7 @@ function PatientForm({ initial, onSave, onCancel }) {
     { key: "imaging", label: "Hormone Assays & Imaging" },
     { key: "husband", label: "Husband Investigations" },
     { key: "plan", label: "Diagnosis & Plan" },
+    { key: "prescriptions", label: "Prescriptions" },
   ];
 
   const addHormoneEntry = (key) => setData((prev) => ({
@@ -1857,9 +1868,20 @@ function PatientForm({ initial, onSave, onCancel }) {
         </Card>
       )}
 
+      {tab === "prescriptions" && (
+        <PrescriptionsPanel
+          patient={data}
+          prescriptions={pendingRx}
+          drugOptions={drugOptions}
+          onAdd={addRx}
+          onUpdate={updateRx}
+          onDelete={deleteRx}
+        />
+      )}
+
       <div className="flex gap-3 justify-end pb-6">
         <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
-        <Btn icon={Save} onClick={() => onSave(data)}>Save Patient</Btn>
+        <Btn icon={Save} onClick={() => onSave(data, pendingRx)}>Save Patient</Btn>
       </div>
     </div>
     </HighlightContext.Provider>
@@ -1869,13 +1891,8 @@ function PatientForm({ initial, onSave, onCancel }) {
 /* ---------------------------------------------------------------------
    Patient Detail
 --------------------------------------------------------------------- */
-function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPrescription, onUpdatePrescription, onDeletePrescription, onAddCycle, onAddMonitoring, onAddSemen, onAddFile, onRemoveFile, onSaveHighlights }) {
+function PatientDetail({ patient, prescriptions, drugOptions, cycles, onBack, onEdit, onAddPrescription, onUpdatePrescription, onDeletePrescription, onAddCycle, onAddMonitoring, onAddSemen, onAddFile, onRemoveFile, onSaveHighlights }) {
   const [tab, setTab] = useState("overview");
-  const [rxOpen, setRxOpen] = useState(false);
-  const [rxFor, setRxFor] = useState("Wife");
-  const [editRxId, setEditRxId] = useState(null);
-  const [viewRxId, setViewRxId] = useState(null);
-  const [printRxId, setPrintRxId] = useState(null);
   const [cycleOpen, setCycleOpen] = useState(false);
   const [monOpen, setMonOpen] = useState(null);
   const [fileBusy, setFileBusy] = useState(false);
@@ -1900,31 +1917,10 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
     [patient, pendingHighlights]
   );
 
-  // Printing a single prescription (see the hidden .print-only block below)
-  // needs its content committed to the DOM before window.print() reads the
-  // page, and needs to clear itself once the print dialog closes so the
-  // next print (of a different prescription) doesn't inherit stale state.
-  useEffect(() => {
-    const reset = () => setPrintRxId(null);
-    window.addEventListener("afterprint", reset);
-    return () => window.removeEventListener("afterprint", reset);
-  }, []);
-  const printRx = (id) => { setPrintRxId(id); requestAnimationFrame(() => window.print()); };
-  const confirmDeleteRx = (id) => {
-    if (window.confirm("Delete this prescription? This cannot be undone.")) onDeletePrescription(id);
-  };
 
   const pRx = prescriptions.filter((r) => r.patientId === patient.id);
   const pCycles = cycles.filter((c) => c.patientId === patient.id);
   const patientFiles = patient.files || [];
-
-  // Any drug name a doctor has ever typed into "Other" on this or any other
-  // patient's prescription is folded back into the dropdown here, so it
-  // only needs to be typed once — no separate "custom drugs" list to store.
-  const drugOptions = useMemo(
-    () => _.uniq([...DRUG_OPTIONS, ..._.flatMap(prescriptions, (rx) => (rx.medicines || []).map((m) => m.name))].filter(Boolean).map((s) => s.toUpperCase())),
-    [prescriptions]
-  );
 
   return (
     <HighlightContext.Provider value={{ highlights: pendingHighlights, onToggle: toggleHighlight }}>
@@ -2125,117 +2121,16 @@ function PatientDetail({ patient, prescriptions, cycles, onBack, onEdit, onAddPr
         </div>
       )}
 
-      {tab === "prescriptions" && (() => {
-        const wifeLabel = patient.patientName || "Wife";
-        const husbandLabel = patient.husbandName || "Husband";
-        const rxForLabel = rxFor === "Husband" ? husbandLabel : wifeLabel;
-        const scopedRx = pRx.filter((r) => (r.for || "Wife") === rxFor);
-        return (
-        <Card className="p-5">
-          <div className="flex items-center justify-between mb-3 no-print">
-            <SectionTitle icon={Pill}>Prescriptions</SectionTitle>
-          </div>
-          <div className="flex gap-1 mb-4 no-print border-b" style={{ borderColor: C.border }}>
-            {[["Wife", wifeLabel], ["Husband", husbandLabel]].map(([key, label]) => (
-              <button key={key} onClick={() => setRxFor(key)} className="px-4 py-2 text-sm font-medium whitespace-nowrap"
-                style={{ color: rxFor === key ? C.primary : C.inkFaint, borderBottom: rxFor === key ? `2px solid ${C.primary}` : "2px solid transparent" }}>
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="flex justify-end mb-3 no-print">
-            <Btn size="sm" icon={Plus} onClick={() => setRxOpen(true)}>New Prescription for {rxForLabel}</Btn>
-          </div>
-          <div className="flex flex-col gap-3 no-print">
-            {_.orderBy(scopedRx, ["date"], ["desc"]).map((rx) => (
-              <div key={rx.id} className="rounded-xl p-4" style={{ background: C.slateTint }}>
-                <div className="flex justify-between items-center mb-2">
-                  <div>
-                    <p className="text-sm font-semibold" style={{ color: C.ink }}>{fmtDate(rx.date)}</p>
-                    <p className="text-xs" style={{ color: C.inkFaint }}>{rx.doctor}</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <button type="button" title="View" onClick={() => setViewRxId(rx.id)}><Eye size={15} style={{ color: C.inkFaint }} /></button>
-                    <button type="button" title="Edit" onClick={() => setEditRxId(rx.id)}><Pencil size={15} style={{ color: C.inkFaint }} /></button>
-                    <button type="button" title="Delete" onClick={() => confirmDeleteRx(rx.id)}><Trash2 size={15} style={{ color: C.inkFaint }} /></button>
-                  </div>
-                </div>
-                <ul className="text-sm flex flex-col gap-1.5">
-                  {groupMedicines(rx.medicines).map((g, gi) => (
-                    <li key={gi} style={{ color: C.ink }}>
-                      • <strong>{g.name}</strong>
-                      {g.doses.length === 1 ? (
-                        <> — {g.doses[0].dosage}, {g.doses[0].frequency}{g.doses[0].duration ? `, ${g.doses[0].duration}` : ""}{g.doses[0].quantity ? `, Qty ${g.doses[0].quantity}` : ""} {g.doses[0].instructions && <span style={{ color: C.inkFaint }}>({g.doses[0].instructions})</span>}</>
-                      ) : (
-                        <ul className="mt-0.5" style={{ paddingLeft: 16 }}>
-                          {g.doses.map((d) => (
-                            <li key={d.id}>– {d.dosage}, {d.frequency}{d.duration ? `, ${d.duration}` : ""}{d.quantity ? `, Qty ${d.quantity}` : ""} {d.instructions && <span style={{ color: C.inkFaint }}>({d.instructions})</span>}</li>
-                          ))}
-                        </ul>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-                {rx.advice && <p className="text-xs mt-2" style={{ color: C.inkMuted }}>Advice: {rx.advice}</p>}
-              </div>
-            ))}
-            {scopedRx.length === 0 && <p className="text-sm" style={{ color: C.inkFaint }}>No prescriptions recorded yet for {rxForLabel}.</p>}
-          </div>
-
-          {rxOpen && <PrescriptionModal drugOptions={drugOptions} forWhom={rxFor} forLabel={rxForLabel} onClose={() => setRxOpen(false)} onSave={(rx) => { onAddPrescription(patient.id, rx); setRxOpen(false); }} />}
-          {editRxId && (() => {
-            const editing = pRx.find((r) => r.id === editRxId);
-            if (!editing) return null;
-            const editFor = editing.for || "Wife";
-            return (
-              <PrescriptionModal
-                drugOptions={drugOptions}
-                initial={editing}
-                forWhom={editFor}
-                forLabel={editFor === "Husband" ? husbandLabel : wifeLabel}
-                onClose={() => setEditRxId(null)}
-                onSave={(rx) => { onUpdatePrescription({ ...rx, patientId: patient.id }); setEditRxId(null); }}
-              />
-            );
-          })()}
-          {viewRxId && (() => {
-            const rx = pRx.find((r) => r.id === viewRxId);
-            if (!rx) return null;
-            return (
-              <ModalShell title={`Prescription — ${fmtDate(rx.date)}`} onClose={() => setViewRxId(null)} wide>
-                <PrescriptionView rx={rx} forLabel={rx.for === "Husband" ? husbandLabel : wifeLabel} />
-                <div className="flex justify-end gap-2 mt-5">
-                  <Btn variant="ghost" icon={Printer} onClick={() => printRx(rx.id)}>Print</Btn>
-                  <Btn variant="ghost" onClick={() => setViewRxId(null)}>Close</Btn>
-                </div>
-              </ModalShell>
-            );
-          })()}
-          {printRxId && (() => {
-            const rx = pRx.find((r) => r.id === printRxId);
-            if (!rx) return null;
-            // Printed onto pre-printed letterhead paper (see .print-rx) —
-            // no clinic name/address here, just enough to identify the
-            // patient/file, with the name and age of whichever of the
-            // couple this prescription is actually for.
-            const isHusband = rx.for === "Husband";
-            const printName = isHusband ? husbandLabel : (patient.patientName || "Unnamed");
-            const age = isHusband ? patient.ageH : patient.ageW;
-            return (
-              <div className="print-only print-rx">
-                <div className="flex items-center justify-between mb-4" style={{ borderBottom: `1px solid ${C.border}`, paddingBottom: 10 }}>
-                  <div className="text-sm" style={{ color: C.ink }}>
-                    <strong>{printName}</strong> · File No. {patient.fileNo || "—"} · Age {age || "—"}
-                  </div>
-                  <div className="text-xs" style={{ color: C.inkMuted }}>{fmtDate(todayISO())}</div>
-                </div>
-                <PrescriptionView rx={rx} forLabel={isHusband ? husbandLabel : wifeLabel} />
-              </div>
-            );
-          })()}
-        </Card>
-        );
-      })()}
+      {tab === "prescriptions" && (
+        <PrescriptionsPanel
+          patient={patient}
+          prescriptions={pRx}
+          drugOptions={drugOptions}
+          onAdd={(rx) => onAddPrescription(patient.id, rx)}
+          onUpdate={(rx) => onUpdatePrescription({ ...rx, patientId: patient.id })}
+          onDelete={onDeletePrescription}
+        />
+      )}
 
       {tab === "cycles" && (
         <div className="flex flex-col gap-5">
@@ -2454,6 +2349,147 @@ function PrescriptionView({ rx, forLabel }) {
   );
 }
 
+/* Shared prescriptions UI — used both by Patient Detail's own Prescriptions
+   tab (persists each change immediately via the on* callbacks) and by the
+   registration/edit form's Prescriptions tab (which queues changes in local
+   state and only persists them once the patient itself has been saved,
+   since a prescription's patientId must reference an existing Patient row
+   on the server — see PatientForm's pendingRx and savePatient's handling of
+   it). Which of those two the on* callbacks actually do is the caller's
+   concern; this component only needs add/update/delete functions. */
+function PrescriptionsPanel({ patient, prescriptions, drugOptions, onAdd, onUpdate, onDelete }) {
+  const [rxOpen, setRxOpen] = useState(false);
+  const [rxFor, setRxFor] = useState("Wife");
+  const [editRxId, setEditRxId] = useState(null);
+  const [viewRxId, setViewRxId] = useState(null);
+  const [printRxId, setPrintRxId] = useState(null);
+
+  // Printing a single prescription (see the hidden .print-only block below)
+  // needs its content committed to the DOM before window.print() reads the
+  // page, and needs to clear itself once the print dialog closes so the
+  // next print (of a different prescription) doesn't inherit stale state.
+  useEffect(() => {
+    const reset = () => setPrintRxId(null);
+    window.addEventListener("afterprint", reset);
+    return () => window.removeEventListener("afterprint", reset);
+  }, []);
+  const printRx = (id) => { setPrintRxId(id); requestAnimationFrame(() => window.print()); };
+  const confirmDelete = (id) => {
+    if (window.confirm("Delete this prescription? This cannot be undone.")) onDelete(id);
+  };
+
+  const wifeLabel = patient.patientName || "Wife";
+  const husbandLabel = patient.husbandName || "Husband";
+  const rxForLabel = rxFor === "Husband" ? husbandLabel : wifeLabel;
+  const scopedRx = prescriptions.filter((r) => (r.for || "Wife") === rxFor);
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-center justify-between mb-3 no-print">
+        <SectionTitle icon={Pill}>Prescriptions</SectionTitle>
+      </div>
+      <div className="flex gap-1 mb-4 no-print border-b" style={{ borderColor: C.border }}>
+        {[["Wife", wifeLabel], ["Husband", husbandLabel]].map(([key, label]) => (
+          <button key={key} onClick={() => setRxFor(key)} className="px-4 py-2 text-sm font-medium whitespace-nowrap"
+            style={{ color: rxFor === key ? C.primary : C.inkFaint, borderBottom: rxFor === key ? `2px solid ${C.primary}` : "2px solid transparent" }}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="flex justify-end mb-3 no-print">
+        <Btn size="sm" icon={Plus} onClick={() => setRxOpen(true)}>New Prescription for {rxForLabel}</Btn>
+      </div>
+      <div className="flex flex-col gap-3 no-print">
+        {_.orderBy(scopedRx, ["date"], ["desc"]).map((rx) => (
+          <div key={rx.id} className="rounded-xl p-4" style={{ background: C.slateTint }}>
+            <div className="flex justify-between items-center mb-2">
+              <div>
+                <p className="text-sm font-semibold" style={{ color: C.ink }}>{fmtDate(rx.date)}</p>
+                <p className="text-xs" style={{ color: C.inkFaint }}>{rx.doctor}</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <button type="button" title="View" onClick={() => setViewRxId(rx.id)}><Eye size={15} style={{ color: C.inkFaint }} /></button>
+                <button type="button" title="Edit" onClick={() => setEditRxId(rx.id)}><Pencil size={15} style={{ color: C.inkFaint }} /></button>
+                <button type="button" title="Delete" onClick={() => confirmDelete(rx.id)}><Trash2 size={15} style={{ color: C.inkFaint }} /></button>
+              </div>
+            </div>
+            <ul className="text-sm flex flex-col gap-1.5">
+              {groupMedicines(rx.medicines).map((g, gi) => (
+                <li key={gi} style={{ color: C.ink }}>
+                  • <strong>{g.name}</strong>
+                  {g.doses.length === 1 ? (
+                    <> — {g.doses[0].dosage}, {g.doses[0].frequency}{g.doses[0].duration ? `, ${g.doses[0].duration}` : ""}{g.doses[0].quantity ? `, Qty ${g.doses[0].quantity}` : ""} {g.doses[0].instructions && <span style={{ color: C.inkFaint }}>({g.doses[0].instructions})</span>}</>
+                  ) : (
+                    <ul className="mt-0.5" style={{ paddingLeft: 16 }}>
+                      {g.doses.map((d) => (
+                        <li key={d.id}>– {d.dosage}, {d.frequency}{d.duration ? `, ${d.duration}` : ""}{d.quantity ? `, Qty ${d.quantity}` : ""} {d.instructions && <span style={{ color: C.inkFaint }}>({d.instructions})</span>}</li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {rx.advice && <p className="text-xs mt-2" style={{ color: C.inkMuted }}>Advice: {rx.advice}</p>}
+          </div>
+        ))}
+        {scopedRx.length === 0 && <p className="text-sm" style={{ color: C.inkFaint }}>No prescriptions recorded yet for {rxForLabel}.</p>}
+      </div>
+
+      {rxOpen && <PrescriptionModal drugOptions={drugOptions} forWhom={rxFor} forLabel={rxForLabel} onClose={() => setRxOpen(false)} onSave={(rx) => { onAdd(rx); setRxOpen(false); }} />}
+      {editRxId && (() => {
+        const editing = prescriptions.find((r) => r.id === editRxId);
+        if (!editing) return null;
+        const editFor = editing.for || "Wife";
+        return (
+          <PrescriptionModal
+            drugOptions={drugOptions}
+            initial={editing}
+            forWhom={editFor}
+            forLabel={editFor === "Husband" ? husbandLabel : wifeLabel}
+            onClose={() => setEditRxId(null)}
+            onSave={(rx) => { onUpdate(rx); setEditRxId(null); }}
+          />
+        );
+      })()}
+      {viewRxId && (() => {
+        const rx = prescriptions.find((r) => r.id === viewRxId);
+        if (!rx) return null;
+        return (
+          <ModalShell title={`Prescription — ${fmtDate(rx.date)}`} onClose={() => setViewRxId(null)} wide>
+            <PrescriptionView rx={rx} forLabel={rx.for === "Husband" ? husbandLabel : wifeLabel} />
+            <div className="flex justify-end gap-2 mt-5">
+              <Btn variant="ghost" icon={Printer} onClick={() => printRx(rx.id)}>Print</Btn>
+              <Btn variant="ghost" onClick={() => setViewRxId(null)}>Close</Btn>
+            </div>
+          </ModalShell>
+        );
+      })()}
+      {printRxId && (() => {
+        const rx = prescriptions.find((r) => r.id === printRxId);
+        if (!rx) return null;
+        // Printed onto pre-printed letterhead paper (see .print-rx) — no
+        // clinic name/address here, just enough to identify the patient/
+        // file, with the name and age of whichever of the couple this
+        // prescription is actually for.
+        const isHusband = rx.for === "Husband";
+        const printName = isHusband ? husbandLabel : (patient.patientName || "Unnamed");
+        const age = isHusband ? patient.ageH : patient.ageW;
+        return (
+          <div className="print-only print-rx">
+            <div className="flex items-center justify-between mb-4" style={{ borderBottom: `1px solid ${C.border}`, paddingBottom: 10 }}>
+              <div className="text-sm" style={{ color: C.ink }}>
+                <strong>{printName}</strong> · File No. {patient.fileNo || "—"} · Age {age || "—"}
+              </div>
+              <div className="text-xs" style={{ color: C.inkMuted }}>{fmtDate(todayISO())}</div>
+            </div>
+            <PrescriptionView rx={rx} forLabel={isHusband ? husbandLabel : wifeLabel} />
+          </div>
+        );
+      })()}
+    </Card>
+  );
+}
+
 function CycleModal({ onClose, onSave, nextCycleNo }) {
   const [type, setType] = useState("IUI");
   const [startDate, setStartDate] = useState(todayISO());
@@ -2572,6 +2608,15 @@ export default function App() {
   const persistPatients = async (next) => { setPatients(next); if (!IS_WEB) await storageSet("patients", next); };
   const persistRx = async (next) => { setPrescriptions(next); if (!IS_WEB) await storageSet("prescriptions", next); };
   const persistCycles = async (next) => { setCycles(next); await storageSet("cycles", next); };
+
+  // Any drug name a doctor has ever typed into "Other" on any patient's
+  // prescription is folded back into the dropdown, so it only needs to be
+  // typed once — shared by Patient Detail's Prescriptions tab and the
+  // registration/edit form's Prescriptions tab.
+  const drugOptions = useMemo(
+    () => _.uniq([...DRUG_OPTIONS, ..._.flatMap(prescriptions, (rx) => (rx.medicines || []).map((m) => m.name))].filter(Boolean).map((s) => s.toUpperCase())),
+    [prescriptions]
+  );
 
   const handleLogin = async (username, password) => {
   const api = window?.api;
@@ -2696,7 +2741,7 @@ export default function App() {
 
   const openPatient = (id) => { setSelectedId(id); setView("patientDetail"); };
 
-  const savePatient = async (data) => {
+  const savePatient = async (data, pendingRx = []) => {
     const exists = patients.some((p) => p.id === data.id);
     const fileNo = (data.fileNo || "").trim();
     if (fileNo) {
@@ -2716,6 +2761,37 @@ export default function App() {
     }
     const next = exists ? patients.map((p) => (p.id === data.id ? data : p)) : [...patients, data];
     await persistPatients(next);
+
+    // Prescriptions the doctor added/edited/removed on the form's own
+    // Prescriptions tab were only queued in PatientForm's local state (see
+    // pendingRx there) — a prescription's patientId must reference an
+    // existing Patient row on the server, so they can only be reconciled
+    // against the backend now that the patient above is definitely saved.
+    const originalRx = prescriptions.filter((r) => r.patientId === data.id);
+    let nextRx = prescriptions;
+    try {
+      for (const rx of pendingRx) {
+        const before = originalRx.find((r) => r.id === rx.id);
+        if (!before) {
+          const record = IS_WEB ? await createPrescriptionRemote({ ...rx, patientId: data.id }) : { ...rx, patientId: data.id };
+          nextRx = [...nextRx, record];
+        } else if (!_.isEqual(before, rx)) {
+          const record = IS_WEB ? await updatePrescriptionRemote(rx.id, rx) : rx;
+          nextRx = nextRx.map((r) => (r.id === rx.id ? record : r));
+        }
+      }
+      const pendingIds = new Set(pendingRx.map((r) => r.id));
+      for (const rx of originalRx) {
+        if (!pendingIds.has(rx.id)) {
+          if (IS_WEB) await deletePrescriptionRemote(rx.id);
+          nextRx = nextRx.filter((r) => r.id !== rx.id);
+        }
+      }
+      if (nextRx !== prescriptions) await persistRx(nextRx);
+    } catch (error) {
+      showToast(error.message || "Patient saved, but a prescription failed to sync.", "error");
+    }
+
     showToast(exists ? "Patient updated." : "Patient registered.");
     setEditingPatient(null);
     setSelectedId(data.id);
@@ -2855,12 +2931,21 @@ export default function App() {
       <Shell user={currentUser} view={view === "patientDetail" || view === "editPatient" ? "patients" : view} setView={(v) => { setView(v); setEditingPatient(null); }} onLogout={handleLogout} onOpenChangePassword={() => setChangePwOpen(true)} onOpenBackups={openBackups} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}>
         {view === "dashboard" && <Dashboard patients={patients} setView={setView} openPatient={openPatient} />}
         {view === "patients" && <PatientsList patients={patients} openPatient={openPatient} setView={setView} deletePatient={deletePatient} />}
-        {view === "newPatient" && <PatientForm onSave={savePatient} onCancel={() => setView("patients")} />}
-        {view === "editPatient" && selected && <PatientForm initial={selected} onSave={savePatient} onCancel={() => { setView("patientDetail"); }} />}
+        {view === "newPatient" && <PatientForm drugOptions={drugOptions} onSave={savePatient} onCancel={() => setView("patients")} />}
+        {view === "editPatient" && selected && (
+          <PatientForm
+            initial={selected}
+            existingPrescriptions={prescriptions.filter((r) => r.patientId === selected.id)}
+            drugOptions={drugOptions}
+            onSave={savePatient}
+            onCancel={() => { setView("patientDetail"); }}
+          />
+        )}
         {view === "patientDetail" && selected && (
           <PatientDetail
             patient={selected}
             prescriptions={prescriptions}
+            drugOptions={drugOptions}
             cycles={cycles}
             onBack={() => setView("patients")}
             onEdit={() => setView("editPatient")}
