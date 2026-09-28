@@ -491,6 +491,9 @@ function highlightableFields(patient) {
       const entries = patient.husband.invest[`${k}Entries`] || [];
       return entries.map((e, i) => ({ id: `husband.invest.${k}Entries.${e.id}`, label: `Investigation (Husband) — ${label}${entries.length > 1 ? ` #${i + 1}` : ""}`, value: e.result }));
     }),
+    { id: "exam.bmi", label: "BMI", value: patient.exam.bmi },
+    { id: "invest.homaIR", label: "HOMA-IR (Wife)", value: patient.invest.homaIR },
+    { id: "husband.invest.homaIR", label: "HOMA-IR (Husband)", value: patient.husband.invest.homaIR },
     { id: "diagnosis", label: "Diagnosis", value: patient.diagnosis },
     { id: "planOfManagement", label: "Plan of Management", value: patient.planOfManagement },
     { id: "laparoscopy.findings", label: "Laparoscopy", value: patient.laparoscopy.findings },
@@ -685,26 +688,29 @@ function SelectField({ label, value, onChange, options, full, placeholder, highl
   );
 }
 /* Read-only display for a value this update computes automatically (BMI,
-   HOMA-IR) so it's visually distinct from fields the doctor types into. */
-function ComputedField({ label, value, hint }) {
+   HOMA-IR) so it's visually distinct from fields the doctor types into.
+   Still highlightable like any other field, since an abnormal BMI/HOMA-IR
+   is exactly the kind of thing worth flagging for the next visit. */
+function ComputedField({ label, value, hint, highlightId }) {
+  const h = useHighlight(highlightId);
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-xs font-medium" style={{ color: C.inkMuted }}>{label}</span>
+      <FieldLabel label={label} highlightId={highlightId} />
       <input
         readOnly
         value={value || "—"}
         className="rounded-lg px-3 py-2 text-sm outline-none"
-        style={{ border: `1px solid ${C.borderStrong}`, color: C.ink, background: C.slateTint, cursor: "not-allowed" }}
+        style={{ border: `1px solid ${C.borderStrong}`, color: C.ink, background: C.slateTint, cursor: "not-allowed", ...highlightFieldStyle(h) }}
       />
       {hint && <span className="text-[11px]" style={{ color: C.inkFaint }}>{hint}</span>}
     </label>
   );
 }
-function BMIField({ value }) {
-  return <ComputedField label="BMI (auto-calculated)" value={value} hint={bmiCategory(value) || "weight(kg) ÷ height(m)²"} />;
+function BMIField({ value, highlightId }) {
+  return <ComputedField label="BMI (auto-calculated)" value={value} hint={bmiCategory(value) || "weight(kg) ÷ height(m)²"} highlightId={highlightId} />;
 }
-function HomaIRField({ value }) {
-  return <ComputedField label="HOMA-IR (auto-calculated)" value={value} hint="(Insulin × Fasting Glucose) ÷ 405" />;
+function HomaIRField({ value, highlightId }) {
+  return <ComputedField label="HOMA-IR (auto-calculated)" value={value} hint="(Insulin × Fasting Glucose) ÷ 405" highlightId={highlightId} />;
 }
 /* Photo upload — downscales the image client-side (see readImageAsDataURL)
    and stores it as a data URL, with a thumbnail preview and a way to clear it. */
@@ -1724,7 +1730,7 @@ function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave,
                     onAdd={() => addTestEntry(`exam.${k}Entries`)}
                     onRemove={(id) => removeTestEntry(`exam.${k}Entries`, id)}
                     onUpdate={(id, f, v) => updExamEntry(k, id, f, v)} />
-                  {k === "weight" && <BMIField value={data.exam.bmi} />}
+                  {k === "weight" && <BMIField value={data.exam.bmi} highlightId="exam.bmi" />}
                 </Fragment>
               ))}
             </div>
@@ -1744,7 +1750,7 @@ function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave,
                     onAdd={() => addTestEntry(`invest.${k}Entries`)}
                     onRemove={(id) => removeTestEntry(`invest.${k}Entries`, id)}
                     onUpdate={(id, f, v) => updWifeInvestEntry(k, id, f, v)} />
-                  {k === "homaGlucose" && <HomaIRField value={data.invest.homaIR} />}
+                  {k === "homaGlucose" && <HomaIRField value={data.invest.homaIR} highlightId="invest.homaIR" />}
                 </Fragment>
               ))}
             </div>
@@ -1799,7 +1805,7 @@ function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave,
                     onAdd={() => addTestEntry(`husband.invest.${k}Entries`)}
                     onRemove={(id) => removeTestEntry(`husband.invest.${k}Entries`, id)}
                     onUpdate={(id, f, v) => updHusbandInvestEntry(k, id, f, v)} />
-                  {k === "homaGlucose" && <HomaIRField value={data.husband.invest.homaIR} />}
+                  {k === "homaGlucose" && <HomaIRField value={data.husband.invest.homaIR} highlightId="husband.invest.homaIR" />}
                 </Fragment>
               ))}
             </div>
@@ -2007,21 +2013,21 @@ function PatientDetail({ patient, prescriptions, drugOptions, cycles, onBack, on
               {EXAM_FIELDS.map(([k, label]) => (
                 <RepeatableTestRow key={k} label={label} entries={patient.exam[`${k}Entries`]} highlightPrefix={`exam.${k}Entries`} />
               ))}
-              <HighlightRow label="BMI" value={patient.exam.bmi} />
+              <HighlightRow label="BMI" value={patient.exam.bmi} highlightId="exam.bmi" />
             </dl>
             <SectionTitle icon={TestTube2}>Investigations (Wife)</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm mb-4">
               {INVEST_FIELDS.map(([k, label]) => (
                 <RepeatableTestRow key={k} label={label} entries={patient.invest[`${k}Entries`]} highlightPrefix={`invest.${k}Entries`} />
               ))}
-              <HighlightRow label="HOMA-IR" value={patient.invest.homaIR} />
+              <HighlightRow label="HOMA-IR" value={patient.invest.homaIR} highlightId="invest.homaIR" />
             </dl>
             <SectionTitle icon={TestTube2} sub="Husband">Investigations (Husband)</SectionTitle>
             <dl className="grid grid-cols-2 gap-y-2 text-sm">
               {INVEST_FIELDS_HUSBAND.map(([k, label]) => (
                 <RepeatableTestRow key={k} label={label} entries={patient.husband.invest[`${k}Entries`]} highlightPrefix={`husband.invest.${k}Entries`} />
               ))}
-              <HighlightRow label="HOMA-IR" value={patient.husband.invest.homaIR} />
+              <HighlightRow label="HOMA-IR" value={patient.husband.invest.homaIR} highlightId="husband.invest.homaIR" />
             </dl>
           </Card>
           <Card className="p-5 lg:col-span-2">
