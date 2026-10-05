@@ -1,5 +1,6 @@
 const { prisma } = require("../_lib/prisma");
 const { requireUser } = require("../_lib/auth");
+const { findFileNoDuplicate, sendFileNoDuplicate } = require("../_lib/fileNo");
 
 module.exports = async function handler(req, res) {
   try {
@@ -41,6 +42,17 @@ module.exports = async function handler(req, res) {
     if (req.method === "PUT") {
       const payload = req.body || {};
       const fullName = String(payload.patientName || "").trim();
+
+      // Only check when the File No. is new or changed, so records that
+      // already shared a File No. before this check existed stay editable.
+      const current = await prisma.patient.findUnique({ where: { patientId } });
+      const norm = (v) => String(v || "").trim().toLowerCase();
+      if (!current || norm(current.data?.fileNo) !== norm(payload.fileNo)) {
+        const duplicate = await findFileNoDuplicate(payload.fileNo, patientId);
+        if (duplicate) {
+          return sendFileNoDuplicate(res, payload.fileNo, duplicate);
+        }
+      }
 
       // Upsert: the frontend always knows whether it's editing an existing
       // patient or registering a new one, but this stays resilient if a

@@ -1,5 +1,6 @@
 const { prisma } = require("../_lib/prisma");
 const { requireUser } = require("../_lib/auth");
+const { findFileNoDuplicate, sendFileNoDuplicate } = require("../_lib/fileNo");
 
 // The registration form (renderer/src/App.jsx -> blankPatient()) produces a
 // large nested object (history, exam, hormone panels, husband's semen
@@ -57,6 +58,11 @@ module.exports = async function handler(req, res) {
         return res.status(409).json({
           error: "A patient with this id already exists",
         });
+      }
+
+      const duplicate = await findFileNoDuplicate(payload.fileNo, clientId);
+      if (duplicate) {
+        return sendFileNoDuplicate(res, payload.fileNo, duplicate);
       }
 
       const created = await prisma.patient.create({

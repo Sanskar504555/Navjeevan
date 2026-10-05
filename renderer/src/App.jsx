@@ -191,7 +191,9 @@ async function apiFetch(path, options = {}) {
   let body = null;
   try { body = await res.json(); } catch (e) { /* no body */ }
   if (!res.ok) {
-    throw new Error((body && body.error) || "Request failed");
+    const error = new Error((body && body.error) || "Request failed");
+    error.body = body;
+    throw error;
   }
   return body;
 }
@@ -652,7 +654,7 @@ function FieldLabel({ label, highlightId }) {
 /* ---------------------------------------------------------------------
    Small UI primitives
 --------------------------------------------------------------------- */
-function TextField({ label, value, onChange, placeholder, type = "text", full, highlightId }) {
+function TextField({ label, value, onChange, onBlur, placeholder, type = "text", full, highlightId }) {
   const h = useHighlight(highlightId);
   return (
     <label className={"flex flex-col gap-1 " + (full ? "col-span-full" : "")}>
@@ -665,7 +667,7 @@ function TextField({ label, value, onChange, placeholder, type = "text", full, h
         className="rounded-lg px-3 py-2 text-sm outline-none transition"
         style={{ border: `1px solid ${C.borderStrong}`, color: C.ink, background: "#fff", ...highlightFieldStyle(h) }}
         onFocus={(e) => (e.target.style.borderColor = C.primary)}
-        onBlur={(e) => (e.target.style.borderColor = h?.color ? C.brick : C.border)}
+        onBlur={(e) => { e.target.style.borderColor = h?.color ? C.brick : C.border; onBlur?.(e.target.value); }}
       />
     </label>
   );
@@ -1538,7 +1540,7 @@ function PatientsList({ patients, openPatient, setView, deletePatient }) {
 /* ---------------------------------------------------------------------
    Patient Form (register / edit)
 --------------------------------------------------------------------- */
-function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave, onCancel }) {
+function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave, onCancel, onCheckFileNo }) {
   const [data, setData] = useState(() => normalizePatient(initial));
   const [tab, setTab] = useState("basic");
   // Prescriptions added/edited/removed while filling out this form are only
@@ -1667,7 +1669,7 @@ function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave,
           <div>
             <SectionTitle icon={ClipboardList}>Registration</SectionTitle>
             <div className="grid sm:grid-cols-3 gap-4">
-              <TextField label="File No." value={data.fileNo} onChange={(v) => set("fileNo", v)} highlightId="fileNo" />
+              <TextField label="File No." value={data.fileNo} onChange={(v) => set("fileNo", v)} onBlur={() => onCheckFileNo?.(data)} highlightId="fileNo" />
               <TextField label="Ref. by Dr." value={data.refDoctor} onChange={(v) => set("refDoctor", v)} highlightId="refDoctor" />
               <TextField label="Date" type="date" value={data.regDate} onChange={(v) => set("regDate", v)} highlightId="regDate" />
               <TextField label="Patient's Name (Wife)" value={data.patientName} onChange={(v) => set("patientName", v)} highlightId="patientName" />
@@ -2251,6 +2253,31 @@ function ModalShell({ title, onClose, children, wide }) {
   );
 }
 
+/* Shown when a File No. being registered/edited already belongs to another
+   patient — a returning patient should be opened and edited, not
+   re-registered. Stays up until dismissed (unlike a toast) so it can't be
+   missed. */
+function DuplicateFileNoModal({ fileNo, patient, onOpen, onClose }) {
+  return (
+    <ModalShell title="Patient already registered" onClose={onClose}>
+      <div className="flex items-start gap-3 rounded-xl p-3 mb-4" style={{ background: C.brickTint, color: C.brick }}>
+        <AlertCircle size={18} className="shrink-0 mt-0.5" />
+        <p className="text-sm">File No. <strong>{fileNo}</strong> is already used by another patient. To record a new visit, open their record and use Edit instead of registering again.</p>
+      </div>
+      <div className="text-sm flex flex-col gap-1 mb-5" style={{ color: C.ink }}>
+        <span><strong>Patient (Wife):</strong> {patient.patientName || "—"}</span>
+        <span><strong>Husband:</strong> {patient.husbandName || "—"}</span>
+        <span><strong>Phone:</strong> {patient.phoneW || patient.phoneH || "—"}</span>
+        <span><strong>Registered:</strong> {patient.regDate || "—"}</span>
+      </div>
+      <div className="flex gap-3 justify-end">
+        <Btn variant="ghost" onClick={onClose}>Close</Btn>
+        <Btn icon={Eye} onClick={onOpen}>Open Existing Record</Btn>
+      </div>
+    </ModalShell>
+  );
+}
+
 function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initial, forWhom = "Wife", forLabel }) {
   const resolvedFor = initial?.for || forWhom;
   const [date, setDate] = useState(initial?.date || todayISO());
@@ -2573,6 +2600,8 @@ export default function App() {
   const [backupsList, setBackupsList] = useState([]);
   const [backupBusy, setBackupBusy] = useState(false);
 
+  const [dupNotice, setDupNotice] = useState(null);
+
   const showToast = (msg, type = "ok") => { setToast({ msg, type }); setTimeout(() => setToast(null), 2200); };
 
   // Web: restore the HttpOnly session first. Only after authentication do
@@ -2747,20 +2776,41 @@ export default function App() {
 
   const openPatient = (id) => { setSelectedId(id); setView("patientDetail"); };
 
+  // The other patient already using data's File No., or null. Skipped when
+  // an edit leaves the File No. unchanged, so records that already shared
+  // one before this check existed stay editable (the API applies the same
+  // rule — see api/_lib/fileNo.js).
+  const findFileNoConflict = (data) => {
+    const normFileNo = (v) => String(v || "").trim().toLowerCase();
+    const fileNo = normFileNo(data.fileNo);
+    if (!fileNo) return null;
+    const original = patients.find((p) => p.id === data.id);
+    if (original && normFileNo(original.fileNo) === fileNo) return null;
+    return patients.find((p) => p.id !== data.id && normFileNo(p.fileNo) === fileNo) || null;
+  };
+  // Returns true (and shows the popup) if data's File No. is taken.
+  const checkFileNo = (data) => {
+    const dup = findFileNoConflict(data);
+    if (dup) setDupNotice({ fileNo: data.fileNo.trim(), patient: dup });
+    return !!dup;
+  };
+
   const savePatient = async (data, pendingRx = []) => {
     const exists = patients.some((p) => p.id === data.id);
-    const fileNo = (data.fileNo || "").trim();
-    if (fileNo) {
-      const dup = patients.find((p) => p.id !== data.id && (p.fileNo || "").trim().toLowerCase() === fileNo.toLowerCase());
-      if (dup) {
-        showToast(`Patient already registered with File No. ${fileNo} (${dup.patientName || "unnamed"}). Open their record and use Edit instead.`, "error");
-        return;
-      }
-    }
+    if (checkFileNo(data)) return;
     if (IS_WEB) {
       try {
         data = exists ? await updatePatientRemote(data.id, data) : await createPatientRemote(data);
       } catch (error) {
+        // The server caught a File No. this session's patient list didn't
+        // know about yet (registered from another PC since login) — add
+        // that patient locally so "Open Existing Record" can show it.
+        const dup = error.body?.duplicate;
+        if (dup) {
+          if (!patients.some((p) => p.id === dup.id)) setPatients((prev) => [...prev, normalizePatient(dup)]);
+          setDupNotice({ fileNo: data.fileNo.trim(), patient: dup });
+          return;
+        }
         showToast(error.message || "Could not save patient.", "error");
         return;
       }
@@ -2937,13 +2987,14 @@ export default function App() {
       <Shell user={currentUser} view={view === "patientDetail" || view === "editPatient" ? "patients" : view} setView={(v) => { setView(v); setEditingPatient(null); }} onLogout={handleLogout} onOpenChangePassword={() => setChangePwOpen(true)} onOpenBackups={openBackups} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}>
         {view === "dashboard" && <Dashboard patients={patients} setView={setView} openPatient={openPatient} />}
         {view === "patients" && <PatientsList patients={patients} openPatient={openPatient} setView={setView} deletePatient={deletePatient} />}
-        {view === "newPatient" && <PatientForm drugOptions={drugOptions} onSave={savePatient} onCancel={() => setView("patients")} />}
+        {view === "newPatient" && <PatientForm drugOptions={drugOptions} onSave={savePatient} onCheckFileNo={checkFileNo} onCancel={() => setView("patients")} />}
         {view === "editPatient" && selected && (
           <PatientForm
             initial={selected}
             existingPrescriptions={prescriptions.filter((r) => r.patientId === selected.id)}
             drugOptions={drugOptions}
             onSave={savePatient}
+            onCheckFileNo={checkFileNo}
             onCancel={() => { setView("patientDetail"); }}
           />
         )}
@@ -2978,6 +3029,11 @@ export default function App() {
       {backupsOpen && (
         <BackupsModal onClose={() => setBackupsOpen(false)} backups={backupsList} onRun={runBackupNow} onRestore={restoreBackup}
           onOpenFolder={IS_WEB ? undefined : () => window.api.backupOpenFolder()} busy={backupBusy} />
+      )}
+      {dupNotice && (
+        <DuplicateFileNoModal fileNo={dupNotice.fileNo} patient={dupNotice.patient}
+          onOpen={() => { setDupNotice(null); setEditingPatient(null); openPatient(dupNotice.patient.id); }}
+          onClose={() => setDupNotice(null)} />
       )}
       <Toast toast={toast} />
     </div>
