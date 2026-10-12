@@ -331,6 +331,26 @@ function setEntryField(entry, field, val) {
   if (field !== "date" && val && !entry.date) next.date = todayISO();
   return next;
 }
+/* Dated entries (test readings, hormone assays, cycles and their rows,
+   semen analyses, procedures) holding nothing but a date. PatientForm
+   swaps these from "" to today when it opens, so the doctor rarely has to
+   pick a date, and from today back to "" on save — otherwise every test
+   never done would be stored, shown and printed as done today. A date the
+   doctor picked themselves (any other day) is left alone. */
+const isBlankEntry = (e) => _.every(_.omit(e, ["id", "date"]), (v) => (Array.isArray(v) ? v.every(isBlankEntry) : !v));
+function swapBlankEntryDates(p, from, to) {
+  const next = _.cloneDeep(p);
+  const swap = (e) => { if (e && isBlankEntry(e) && (e.date || "") === from) e.date = to; };
+  const swapEntries = (group) => _.forEach(group, (list, k) => { if (k.endsWith("Entries")) list.forEach(swap); });
+  swapEntries(next.exam);
+  swapEntries(next.invest);
+  swapEntries(next.husband.invest);
+  _.forEach(next.hormoneAssays, (list) => list.forEach(swap));
+  next.cycles.forEach((c) => { (c.rows || []).forEach(swap); swap(c); });
+  next.husband.semenAnalysis.forEach(swap);
+  ["laparoscopy", "hsg", "hysteroscopy", "pcr", "cbnaat"].forEach((k) => swap(next[k]));
+  return next;
+}
 /* One blank entry per field in a [key, label, ...] config list, keyed as
    `${key}Entries` — used to build exam/invest's default shape in
    blankPatient() without hand-typing every field twice. */
@@ -1555,7 +1575,10 @@ function PatientsList({ patients, openPatient, setView, deletePatient }) {
    Patient Form (register / edit)
 --------------------------------------------------------------------- */
 function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave, onCancel, onCheckFileNo }) {
-  const [data, setData] = useState(() => normalizePatient(initial));
+  // Today's date at form open — pre-filled into every blank dated entry
+  // and stripped from those still blank on save (see swapBlankEntryDates).
+  const [autoDate] = useState(todayISO);
+  const [data, setData] = useState(() => swapBlankEntryDates(normalizePatient(initial), "", autoDate));
   const [tab, setTab] = useState("basic");
   // Prescriptions added/edited/removed while filling out this form are only
   // queued here, not persisted — a prescription's patientId must reference
@@ -1580,7 +1603,7 @@ function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave,
 
   const addTestEntry = (path) => setData((prev) => {
     const next = _.cloneDeep(prev);
-    _.set(next, path, [..._.get(next, path), blankTestEntry()]);
+    _.set(next, path, [..._.get(next, path), { ...blankTestEntry(), date: autoDate }]);
     return next;
   });
   const removeTestEntry = (path, entryId) => setData((prev) => {
@@ -1634,7 +1657,7 @@ function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave,
 
   const addHormoneEntry = (key) => setData((prev) => ({
     ...prev,
-    hormoneAssays: { ...prev.hormoneAssays, [key]: [...prev.hormoneAssays[key], blankHormoneAssayEntry()] },
+    hormoneAssays: { ...prev.hormoneAssays, [key]: [...prev.hormoneAssays[key], { ...blankHormoneAssayEntry(), date: autoDate }] },
   }));
   const removeHormoneEntry = (key, entryId) => setData((prev) => (
     prev.hormoneAssays[key].length <= 1 ? prev : {
@@ -1651,17 +1674,21 @@ function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave,
   }));
 
   const setCycleDate = (cycleId, val) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, date: val } : c) }));
-  const addCycleRow = (cycleId) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, rows: [...c.rows, blankCycleRow()] } : c) }));
+  const addCycleRow = (cycleId) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, rows: [...c.rows, { ...blankCycleRow(), date: autoDate }] } : c) }));
   const rmCycleRow = (cycleId, rowId) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, rows: c.rows.filter((r) => r.id !== rowId) } : c) }));
   const updCycleRow = (cycleId, rowId, field, val) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, date: c.date || (val ? todayISO() : ""), rows: c.rows.map((r) => r.id === rowId ? setEntryField(r, field, val) : r) } : c) }));
-  const addCycle = () => setData((prev) => (prev.cycles.length >= MAX_CYCLES ? prev : { ...prev, cycles: [...prev.cycles, blankPaperCycle()] }));
+  const datedPaperCycle = () => {
+    const c = blankPaperCycle();
+    return { ...c, date: autoDate, rows: c.rows.map((r) => ({ ...r, date: autoDate })) };
+  };
+  const addCycle = () => setData((prev) => (prev.cycles.length >= MAX_CYCLES ? prev : { ...prev, cycles: [...prev.cycles, datedPaperCycle()] }));
   const removeCycle = (cycleId) => setData((prev) => (prev.cycles.length <= 1 ? prev : { ...prev, cycles: prev.cycles.filter((c) => c.id !== cycleId) }));
 
   // Laparoscopy/HSG/Hysteroscopy/PCR/CBNAAT — filling in findings/result
   // dates the procedure today if no date was picked.
   const setProcedure = (group, field, val) => setData((prev) => ({ ...prev, [group]: setEntryField(prev[group], field, val) }));
 
-  const addSemenRow = () => setData((prev) => ({ ...prev, husband: { ...prev.husband, semenAnalysis: [...prev.husband.semenAnalysis, { id: uid(), date: todayISO(), lab: "", count: "", motility: "", pusCells: "" }] } }));
+  const addSemenRow = () => setData((prev) => ({ ...prev, husband: { ...prev.husband, semenAnalysis: [...prev.husband.semenAnalysis, { id: uid(), date: autoDate, lab: "", count: "", motility: "", pusCells: "" }] } }));
   const rmSemenRow = (id) => setData((prev) => ({ ...prev, husband: { ...prev.husband, semenAnalysis: prev.husband.semenAnalysis.filter((r) => r.id !== id) } }));
   const updSemenRow = (id, key, val) => setData((prev) => ({ ...prev, husband: { ...prev.husband, semenAnalysis: prev.husband.semenAnalysis.map((r) => r.id === id ? setEntryField(r, key, val) : r) } }));
 
@@ -1907,7 +1934,7 @@ function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave,
 
       <div className="flex gap-3 justify-end pb-6">
         <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
-        <Btn icon={Save} onClick={() => onSave(data, pendingRx)}>Save Patient</Btn>
+        <Btn icon={Save} onClick={() => onSave(swapBlankEntryDates(data, autoDate, ""), pendingRx)}>Save Patient</Btn>
       </div>
     </div>
     </HighlightContext.Provider>
