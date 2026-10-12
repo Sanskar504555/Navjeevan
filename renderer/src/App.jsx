@@ -66,7 +66,12 @@ const FONTS = (
    Utilities
 --------------------------------------------------------------------- */
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-const todayISO = () => new Date().toISOString().slice(0, 10);
+// Local calendar date — toISOString() is UTC, which in IST gives yesterday's
+// date before 5:30 AM.
+const todayISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 const fmtDate = (d) => {
   if (!d) return "—";
   const dt = new Date(d + "T00:00:00");
@@ -316,6 +321,15 @@ function blankHormoneAssays() {
    overwriting the last one. */
 function blankTestEntry() {
   return { id: uid(), date: "", result: "" };
+}
+/* Sets one field of a dated entry. Typing a value into an entry whose date
+   is still blank fills that date with today, so the doctor only has to pick
+   a date for readings not taken today. Blank entries themselves stay
+   undated, so tests never done don't show/print a date. */
+function setEntryField(entry, field, val) {
+  const next = { ...entry, [field]: val };
+  if (field !== "date" && val && !entry.date) next.date = todayISO();
+  return next;
 }
 /* One blank entry per field in a [key, label, ...] config list, keyed as
    `${key}Entries` — used to build exam/invest's default shape in
@@ -1578,7 +1592,7 @@ function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave,
   });
   const updTestEntry = (path, entryId, field, val) => setData((prev) => {
     const next = _.cloneDeep(prev);
-    _.set(next, path, _.get(next, path).map((e) => e.id === entryId ? { ...e, [field]: val } : e));
+    _.set(next, path, _.get(next, path).map((e) => e.id === entryId ? setEntryField(e, field, val) : e));
     return next;
   });
 
@@ -1590,21 +1604,21 @@ function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave,
   const updExamEntry = (fieldKey, entryId, field, val) => setData((prev) => {
     const next = _.cloneDeep(prev);
     const path = `exam.${fieldKey}Entries`;
-    _.set(next, path, _.get(next, path).map((e) => e.id === entryId ? { ...e, [field]: val } : e));
+    _.set(next, path, _.get(next, path).map((e) => e.id === entryId ? setEntryField(e, field, val) : e));
     next.exam.bmi = calcBMI(lastEntryResult(next.exam.heightEntries), lastEntryResult(next.exam.weightEntries));
     return next;
   });
   const updWifeInvestEntry = (fieldKey, entryId, field, val) => setData((prev) => {
     const next = _.cloneDeep(prev);
     const path = `invest.${fieldKey}Entries`;
-    _.set(next, path, _.get(next, path).map((e) => e.id === entryId ? { ...e, [field]: val } : e));
+    _.set(next, path, _.get(next, path).map((e) => e.id === entryId ? setEntryField(e, field, val) : e));
     next.invest.homaIR = calcHOMAIR(lastEntryResult(next.invest.srInsulinEntries), lastEntryResult(next.invest.homaGlucoseEntries));
     return next;
   });
   const updHusbandInvestEntry = (fieldKey, entryId, field, val) => setData((prev) => {
     const next = _.cloneDeep(prev);
     const path = `husband.invest.${fieldKey}Entries`;
-    _.set(next, path, _.get(next, path).map((e) => e.id === entryId ? { ...e, [field]: val } : e));
+    _.set(next, path, _.get(next, path).map((e) => e.id === entryId ? setEntryField(e, field, val) : e));
     next.husband.invest.homaIR = calcHOMAIR(lastEntryResult(next.husband.invest.srInsulinEntries), lastEntryResult(next.husband.invest.homaGlucoseEntries));
     return next;
   });
@@ -1632,20 +1646,24 @@ function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave,
     ...prev,
     hormoneAssays: {
       ...prev.hormoneAssays,
-      [key]: prev.hormoneAssays[key].map((e) => e.id === entryId ? { ...e, [field]: val } : e),
+      [key]: prev.hormoneAssays[key].map((e) => e.id === entryId ? setEntryField(e, field, val) : e),
     },
   }));
 
   const setCycleDate = (cycleId, val) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, date: val } : c) }));
   const addCycleRow = (cycleId) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, rows: [...c.rows, blankCycleRow()] } : c) }));
   const rmCycleRow = (cycleId, rowId) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, rows: c.rows.filter((r) => r.id !== rowId) } : c) }));
-  const updCycleRow = (cycleId, rowId, field, val) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, rows: c.rows.map((r) => r.id === rowId ? { ...r, [field]: val } : r) } : c) }));
+  const updCycleRow = (cycleId, rowId, field, val) => setData((prev) => ({ ...prev, cycles: prev.cycles.map((c) => c.id === cycleId ? { ...c, date: c.date || (val ? todayISO() : ""), rows: c.rows.map((r) => r.id === rowId ? setEntryField(r, field, val) : r) } : c) }));
   const addCycle = () => setData((prev) => (prev.cycles.length >= MAX_CYCLES ? prev : { ...prev, cycles: [...prev.cycles, blankPaperCycle()] }));
   const removeCycle = (cycleId) => setData((prev) => (prev.cycles.length <= 1 ? prev : { ...prev, cycles: prev.cycles.filter((c) => c.id !== cycleId) }));
 
+  // Laparoscopy/HSG/Hysteroscopy/PCR/CBNAAT — filling in findings/result
+  // dates the procedure today if no date was picked.
+  const setProcedure = (group, field, val) => setData((prev) => ({ ...prev, [group]: setEntryField(prev[group], field, val) }));
+
   const addSemenRow = () => setData((prev) => ({ ...prev, husband: { ...prev.husband, semenAnalysis: [...prev.husband.semenAnalysis, { id: uid(), date: todayISO(), lab: "", count: "", motility: "", pusCells: "" }] } }));
   const rmSemenRow = (id) => setData((prev) => ({ ...prev, husband: { ...prev.husband, semenAnalysis: prev.husband.semenAnalysis.filter((r) => r.id !== id) } }));
-  const updSemenRow = (id, key, val) => setData((prev) => ({ ...prev, husband: { ...prev.husband, semenAnalysis: prev.husband.semenAnalysis.map((r) => r.id === id ? { ...r, [key]: val } : r) } }));
+  const updSemenRow = (id, key, val) => setData((prev) => ({ ...prev, husband: { ...prev.husband, semenAnalysis: prev.husband.semenAnalysis.map((r) => r.id === id ? setEntryField(r, key, val) : r) } }));
 
   return (
     <HighlightContext.Provider value={{ highlights: data.highlights || {}, onToggle: toggleHighlight }}>
@@ -1771,15 +1789,15 @@ function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave,
             <SectionTitle sub="Imaging & procedures">Laparoscopy · HSG · Hysteroscopy · PCR · CBNAAT</SectionTitle>
             <div className="grid sm:grid-cols-2 gap-4">
               <TextField label="Laparoscopy Date" type="date" value={data.laparoscopy.date} onChange={(v) => set("laparoscopy.date", v)} highlightId="laparoscopy.date" />
-              <TextField label="Laparoscopy Findings" value={data.laparoscopy.findings} onChange={(v) => set("laparoscopy.findings", v)} highlightId="laparoscopy.findings" />
+              <TextField label="Laparoscopy Findings" value={data.laparoscopy.findings} onChange={(v) => setProcedure("laparoscopy", "findings", v)} highlightId="laparoscopy.findings" />
               <TextField label="HSG Date" type="date" value={data.hsg.date} onChange={(v) => set("hsg.date", v)} highlightId="hsg.date" />
-              <TextField label="HSG Findings" value={data.hsg.findings} onChange={(v) => set("hsg.findings", v)} highlightId="hsg.findings" />
+              <TextField label="HSG Findings" value={data.hsg.findings} onChange={(v) => setProcedure("hsg", "findings", v)} highlightId="hsg.findings" />
               <TextField label="Hysteroscopy Date" type="date" value={data.hysteroscopy.date} onChange={(v) => set("hysteroscopy.date", v)} highlightId="hysteroscopy.date" />
-              <TextField label="Hysteroscopy Findings" value={data.hysteroscopy.findings} onChange={(v) => set("hysteroscopy.findings", v)} highlightId="hysteroscopy.findings" />
+              <TextField label="Hysteroscopy Findings" value={data.hysteroscopy.findings} onChange={(v) => setProcedure("hysteroscopy", "findings", v)} highlightId="hysteroscopy.findings" />
               <TextField label="PCR Date" type="date" value={data.pcr.date} onChange={(v) => set("pcr.date", v)} highlightId="pcr.date" />
-              <TextField label="PCR Result" value={data.pcr.result} onChange={(v) => set("pcr.result", v)} highlightId="pcr.result" />
+              <TextField label="PCR Result" value={data.pcr.result} onChange={(v) => setProcedure("pcr", "result", v)} highlightId="pcr.result" />
               <TextField label="CBNAAT Date" type="date" value={data.cbnaat.date} onChange={(v) => set("cbnaat.date", v)} highlightId="cbnaat.date" />
-              <TextField label="CBNAAT Result" value={data.cbnaat.result} onChange={(v) => set("cbnaat.result", v)} highlightId="cbnaat.result" />
+              <TextField label="CBNAAT Result" value={data.cbnaat.result} onChange={(v) => setProcedure("cbnaat", "result", v)} highlightId="cbnaat.result" />
             </div>
           </div>
         </Card>
