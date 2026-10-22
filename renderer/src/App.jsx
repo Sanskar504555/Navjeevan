@@ -289,6 +289,7 @@ function blankPatient() {
     husband: {
       habitsHistory: "", genitalExam: "", miscInvestigations: "", semenAnalysis: [],
       invest: { ...blankEntriesFor(INVEST_FIELDS_HUSBAND), homaIR: "" },
+      followUps: [blankFollowUp()],
     },
     diagnosis: "",
     planOfManagement: "",
@@ -322,6 +323,10 @@ function blankHormoneAssays() {
 function blankTestEntry() {
   return { id: uid(), date: "", result: "" };
 }
+/* Husband's follow-up visits — a visit date with a free-text comment. */
+function blankFollowUp() {
+  return { id: uid(), date: "", comment: "" };
+}
 /* Sets one field of a dated entry. Typing a value into an entry whose date
    is still blank fills that date with today, so the doctor only has to pick
    a date for readings not taken today. Blank entries themselves stay
@@ -348,6 +353,7 @@ function swapBlankEntryDates(p, from, to) {
   _.forEach(next.hormoneAssays, (list) => list.forEach(swap));
   next.cycles.forEach((c) => { (c.rows || []).forEach(swap); swap(c); });
   next.husband.semenAnalysis.forEach(swap);
+  next.husband.followUps.forEach(swap);
   ["laparoscopy", "hsg", "hysteroscopy", "pcr", "cbnaat"].forEach((k) => swap(next[k]));
   return next;
 }
@@ -527,6 +533,7 @@ function highlightableFields(patient) {
       const entries = patient.husband.invest[`${k}Entries`] || [];
       return entries.map((e, i) => ({ id: `husband.invest.${k}Entries.${e.id}`, label: `Investigation (Husband) — ${label}${entries.length > 1 ? ` #${i + 1}` : ""}`, value: e.result }));
     }),
+    ...(patient.husband.followUps || []).map((e, i) => ({ id: `husband.followUps.${e.id}`, label: `Follow-up Visit (Husband)${patient.husband.followUps.length > 1 ? ` #${i + 1}` : ""}`, value: e.comment })),
     { id: "exam.bmi", label: "BMI", value: patient.exam.bmi },
     { id: "invest.homaIR", label: "HOMA-IR (Wife)", value: patient.invest.homaIR },
     { id: "husband.invest.homaIR", label: "HOMA-IR (Husband)", value: patient.husband.invest.homaIR },
@@ -1689,6 +1696,9 @@ function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave,
   const setProcedure = (group, field, val) => setData((prev) => ({ ...prev, [group]: setEntryField(prev[group], field, val) }));
 
   const addSemenRow = () => setData((prev) => ({ ...prev, husband: { ...prev.husband, semenAnalysis: [...prev.husband.semenAnalysis, { id: uid(), date: autoDate, lab: "", count: "", motility: "", pusCells: "" }] } }));
+  const addFollowUp = () => setData((prev) => ({ ...prev, husband: { ...prev.husband, followUps: [...prev.husband.followUps, { ...blankFollowUp(), date: autoDate }] } }));
+  const rmFollowUp = (id) => setData((prev) => (prev.husband.followUps.length <= 1 ? prev : { ...prev, husband: { ...prev.husband, followUps: prev.husband.followUps.filter((e) => e.id !== id) } }));
+  const updFollowUp = (id, field, val) => setData((prev) => ({ ...prev, husband: { ...prev.husband, followUps: prev.husband.followUps.map((e) => e.id === id ? setEntryField(e, field, val) : e) } }));
   const rmSemenRow = (id) => setData((prev) => ({ ...prev, husband: { ...prev.husband, semenAnalysis: prev.husband.semenAnalysis.filter((r) => r.id !== id) } }));
   const updSemenRow = (id, key, val) => setData((prev) => ({ ...prev, husband: { ...prev.husband, semenAnalysis: prev.husband.semenAnalysis.map((r) => r.id === id ? setEntryField(r, key, val) : r) } }));
 
@@ -1887,6 +1897,26 @@ function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave,
               )}
             </div>
           </div>
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <SectionTitle icon={CalendarClock} sub="Visit date with notes from that visit">Follow-up Visits</SectionTitle>
+              <Btn size="sm" variant="subtle" icon={Plus} onClick={addFollowUp}>Add Visit</Btn>
+            </div>
+            <div className="flex flex-col gap-2">
+              {data.husband.followUps.map((e) => (
+                <div key={e.id} className="flex items-start gap-2">
+                  <input type="date" value={e.date} onChange={(ev) => updFollowUp(e.id, "date", ev.target.value)}
+                    className="text-sm rounded-lg px-3 py-2 outline-none shrink-0" style={{ border: `1px solid ${C.borderStrong}`, background: "#fff" }} />
+                  <textarea rows={2} value={e.comment} onChange={(ev) => updFollowUp(e.id, "comment", ev.target.value)} placeholder="Comment"
+                    className="text-sm rounded-lg px-3 py-2 outline-none resize-y flex-1 min-w-0" style={{ border: `1px solid ${C.borderStrong}`, color: C.ink, background: "#fff" }} />
+                  <div className="flex items-center gap-2 pt-2.5">
+                    <HighlightDots id={`husband.followUps.${e.id}`} />
+                    {data.husband.followUps.length > 1 && <button type="button" onClick={() => rmFollowUp(e.id)}><Trash2 size={13} style={{ color: C.inkFaint }} /></button>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </Card>
       )}
 
@@ -2075,6 +2105,7 @@ function PatientDetail({ patient, prescriptions, drugOptions, cycles, onBack, on
                 <RepeatableTestRow key={k} label={label} entries={patient.husband.invest[`${k}Entries`]} highlightPrefix={`husband.invest.${k}Entries`} />
               ))}
               <HighlightRow label="HOMA-IR" value={patient.husband.invest.homaIR} highlightId="husband.invest.homaIR" />
+              <RepeatableTestRow label="Follow-up Visits" entries={(patient.husband.followUps || []).map((e) => ({ ...e, result: e.comment }))} highlightPrefix="husband.followUps" />
             </dl>
           </Card>
           <Card className="p-5 lg:col-span-2">
