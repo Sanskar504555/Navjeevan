@@ -1765,8 +1765,8 @@ function PatientForm({ initial, existingPrescriptions = [], drugOptions, onSave,
             <SectionTitle>Fertility & Menstrual History</SectionTitle>
             <div className="grid sm:grid-cols-2 gap-4">
               <TextField label="Married Since" value={data.marriedSince} onChange={(v) => set("marriedSince", v)} highlightId="marriedSince" />
-              <SelectField label="Type of Infertility" value={data.typeInfertility} onChange={(v) => set("typeInfertility", v)} options={TYPE_INFERTILITY_OPTIONS} placeholder="Select…" highlightId="typeInfertility" />
-              <SelectField label="Menstrual History" value={data.menstrualHistory} onChange={(v) => set("menstrualHistory", v)} options={MENSTRUAL_HISTORY_OPTIONS} placeholder="Select…" highlightId="menstrualHistory" />
+              <DropdownOtherField label="Type of Infertility" value={data.typeInfertility} onChange={(v) => set("typeInfertility", v)} options={TYPE_INFERTILITY_OPTIONS} highlightId="typeInfertility" />
+              <DropdownOtherField label="Menstrual History" value={data.menstrualHistory} onChange={(v) => set("menstrualHistory", v)} options={MENSTRUAL_HISTORY_OPTIONS} highlightId="menstrualHistory" />
               <TextField label="LMP" type="date" value={data.lmp} onChange={(v) => set("lmp", v)} highlightId="lmp" />
               <TextAreaField label="Obstetric History" value={data.obstetricHistory} onChange={(v) => set("obstetricHistory", v)} full highlightId="obstetricHistory" />
               <TextAreaField label="Past / Family History" value={data.pastFamilyHistory} onChange={(v) => set("pastFamilyHistory", v)} full highlightId="pastFamilyHistory" />
