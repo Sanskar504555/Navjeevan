@@ -2517,7 +2517,7 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
   // dropped once the doctor changes that name themselves.
   const [voiceMatches, setVoiceMatches] = useState({});
   const updMed = (id, k, v) => {
-    setMeds(meds.map((m) => m.id === id ? { ...m, [k]: v } : m));
+    setMeds(meds.map((m) => m.id !== id ? m : k === "name" ? { ..._.omit(m, "fromVoice"), name: v } : { ...m, [k]: v }));
     if (k === "name") setVoiceMatches((prev) => _.omit(prev, id));
   };
   // Dictated medicines replace any still-empty rows and go after the rest;
@@ -2528,7 +2528,10 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
     if (r.advice) setAdvice((prev) => (prev.trim() ? `${prev.trim()}
 ${r.advice}` : r.advice));
     if (!r.medicines.length) return;
-    const added = r.medicines.map(({ match, ...m }) => ({ id: uid(), ...m }));
+    // fromVoice keeps a dictated name out of the Drug Name dropdown (here
+    // and, once saved, App's drugOptions) — only names the doctor picked or
+    // typed themselves are offered again.
+    const added = r.medicines.map(({ match, ...m }) => ({ id: uid(), ...m, fromVoice: true }));
     setMeds((prev) => [...prev.filter((m) => m.name || m.dosage || m.frequency || m.duration || m.quantity || m.instructions), ...added]);
     setVoiceMatches((prev) => ({ ...prev, ..._.fromPairs(added.map((m, i) => [m.id, r.medicines[i].match])) }));
   };
@@ -2540,7 +2543,7 @@ ${r.advice}` : r.advice));
   const dupMed = (id) => {
     const idx = meds.findIndex((m) => m.id === id);
     if (idx === -1) return;
-    const copy = { id: uid(), name: meds[idx].name, dosage: "", frequency: "", duration: "", quantity: "", instructions: "" };
+    const copy = { id: uid(), name: meds[idx].name, fromVoice: meds[idx].fromVoice, dosage: "", frequency: "", duration: "", quantity: "", instructions: "" };
     setMeds([...meds.slice(0, idx + 1), copy, ...meds.slice(idx + 1)]);
   };
 
@@ -2550,7 +2553,7 @@ ${r.advice}` : r.advice));
   // prescription (see the `drugOptions` prop, which only knows about
   // already-saved prescriptions).
   const liveDrugOptions = useMemo(
-    () => _.uniq([...drugOptions, ...meds.map((m) => m.name)].filter(Boolean).map((s) => s.toUpperCase())),
+    () => _.uniq([...drugOptions, ...meds.filter((m) => !m.fromVoice).map((m) => m.name)].filter(Boolean).map((s) => s.toUpperCase())),
     [drugOptions, meds]
   );
 
@@ -2896,7 +2899,7 @@ export default function App() {
   // typed once — shared by Patient Detail's Prescriptions tab and the
   // registration/edit form's Prescriptions tab.
   const drugOptions = useMemo(
-    () => _.uniq([...DRUG_OPTIONS, ..._.flatMap(prescriptions, (rx) => (rx.medicines || []).map((m) => m.name))].filter(Boolean).map((s) => s.toUpperCase())),
+    () => _.uniq([...DRUG_OPTIONS, ..._.flatMap(prescriptions, (rx) => (rx.medicines || []).filter((m) => !m.fromVoice).map((m) => m.name))].filter(Boolean).map((s) => s.toUpperCase())),
     [prescriptions]
   );
 
