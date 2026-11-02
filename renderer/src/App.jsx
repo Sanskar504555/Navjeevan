@@ -1,15 +1,16 @@
-import { useState, useEffect, useMemo, useContext, createContext, Fragment } from "react";
+import { useState, useEffect, useMemo, useRef, useContext, createContext, Fragment } from "react";
 import _ from "lodash";
 import {
   LayoutDashboard, Users, UserPlus, LogOut, Search, Plus, X, Save,
   ChevronLeft, Pill, TestTube2, Baby, ClipboardList, Trash2, Pencil,
   ArrowLeft, AlertCircle, Clock, CheckCircle2, Menu, ShieldCheck,
   FlaskConical, Stethoscope, CalendarClock, Database,
-  IdCard, Upload, ImagePlus, FileText, Printer, Eye, Star, Copy
+  IdCard, Upload, ImagePlus, FileText, Printer, Eye, Star, Copy, Mic, MicOff
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell
 } from "recharts";
+import { parseDictation } from "./voiceRx";
 
 /* ---------------------------------------------------------------------
    Design tokens
@@ -48,6 +49,8 @@ const FONTS = (
     .emr-scroll::-webkit-scrollbar-thumb { background: #C9D3CE; border-radius: 8px; }
     .emr-fade { animation: emrFade .18s ease; }
     @keyframes emrFade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+    .emr-pulse { animation: emrPulse 1s ease-in-out infinite; }
+    @keyframes emrPulse { 50% { opacity: .3; } }
     .print-only { display: none; }
     @media print {
       @page { size: A4; margin: 0; }
@@ -2354,6 +2357,153 @@ function DuplicateFileNoModal({ fileNo, patient, onOpen, onClose }) {
   );
 }
 
+/* Voice dictation for PrescriptionModal — Chrome/Edge's built-in speech
+   recognition (en-IN); the spoken text is turned into fields by
+   parseDictation (voiceRx.js). Not available in Firefox or the Electron
+   desktop app, which has no speech service. */
+const SpeechRecognitionImpl = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+const VOICE_ERRORS = {
+  "not-allowed": "Microphone access is blocked. Allow the microphone for this site (lock icon in the address bar), then try again.",
+  "service-not-allowed": "Microphone access is blocked. Allow the microphone for this site (lock icon in the address bar), then try again.",
+  "audio-capture": "No microphone was found. Connect a microphone and try again.",
+  network: "Couldn't reach the speech service. Check the internet connection — voice input works in Chrome or Edge on the web app, not in the desktop app.",
+  "language-not-supported": "This browser can't recognise Indian English. Use Chrome or Edge.",
+};
+
+function VoiceDictation({ drugOptions, onResult }) {
+  const [status, setStatus] = useState("idle"); // idle | listening | finishing
+  const [heard, setHeard] = useState("");
+  const [interim, setInterim] = useState("");
+  const [error, setError] = useState("");
+  const [summary, setSummary] = useState("");
+  const [showHelp, setShowHelp] = useState(false);
+  const recRef = useRef(null);
+  const keepListening = useRef(false);
+  const fillOnEnd = useRef(false);
+  const finalText = useRef("");
+  const interimText = useRef("");
+  // The recognizer's callbacks outlive renders — read the latest props.
+  const latest = useRef({ drugOptions, onResult });
+  latest.current = { drugOptions, onResult };
+
+  useEffect(() => () => { keepListening.current = false; recRef.current?.abort(); }, []);
+
+  const fill = () => {
+    const transcript = `${finalText.current} ${interimText.current}`.trim();
+    if (!transcript) { setSummary("Nothing was heard. Try again, speaking a little closer to the microphone."); return; }
+    const parsed = parseDictation(transcript, latest.current.drugOptions);
+    latest.current.onResult(parsed);
+    const n = parsed.medicines.length;
+    const flagged = parsed.medicines.filter((m) => m.match.status !== "ok").length;
+    setSummary(
+      `Filled ${n} medicine${n === 1 ? "" : "s"}${parsed.advice ? ", advice" : ""}${parsed.doctor ? ", doctor" : ""}${parsed.date ? ", date" : ""}.`
+      + (flagged ? ` ${flagged} medicine name${flagged === 1 ? " needs" : "s need"} checking — see the highlighted rows.` : " Please check before saving.")
+    );
+  };
+
+  const start = () => {
+    finalText.current = ""; interimText.current = "";
+    setHeard(""); setInterim(""); setError(""); setSummary("");
+    const rec = new SpeechRecognitionImpl();
+    rec.lang = "en-IN";
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.onresult = (e) => {
+      let pending = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText.current = `${finalText.current} ${t}`.trim();
+        else pending += t;
+      }
+      interimText.current = pending;
+      setHeard(finalText.current);
+      setInterim(pending);
+    };
+    rec.onerror = (e) => {
+      if (e.error === "no-speech" || e.error === "aborted") return;
+      keepListening.current = false;
+      fillOnEnd.current = false;
+      setError(VOICE_ERRORS[e.error] || `Voice input stopped (${e.error}).`);
+    };
+    // Chrome ends a session after a pause; carry on until the doctor stops.
+    rec.onend = () => {
+      if (keepListening.current) { try { rec.start(); return; } catch (err) { /* fall through */ } }
+      setStatus("idle");
+      if (fillOnEnd.current) { fillOnEnd.current = false; fill(); }
+    };
+    recRef.current = rec;
+    keepListening.current = true;
+    try { rec.start(); setStatus("listening"); } catch (err) { setError("Couldn't start the microphone. Try again."); }
+  };
+  const stopAndFill = () => { keepListening.current = false; fillOnEnd.current = true; setStatus("finishing"); recRef.current?.stop(); };
+  const cancel = () => { keepListening.current = false; fillOnEnd.current = false; recRef.current?.abort(); setHeard(""); setInterim(""); };
+
+  if (!SpeechRecognitionImpl) {
+    return (
+      <p className="text-xs rounded-lg px-3 py-2 mb-4 flex items-center gap-2" style={{ background: C.slateTint, color: C.inkMuted }}>
+        <MicOff size={14} /> Voice input needs Chrome or Edge on the web app.
+      </p>
+    );
+  }
+
+  const listening = status !== "idle";
+  return (
+    <div className="rounded-xl p-3 mb-4 no-print" style={{ background: listening ? C.brickTint : C.primaryTint }}>
+      <div className="flex items-center gap-2 flex-wrap">
+        {!listening ? (
+          <Btn size="sm" icon={Mic} onClick={start}>Dictate Prescription</Btn>
+        ) : (
+          <>
+            <span className="inline-flex items-center gap-2 text-sm font-medium" style={{ color: C.brick }}>
+              <span className="emr-pulse" style={{ width: 10, height: 10, borderRadius: 999, background: C.brick, display: "inline-block" }} />
+              {status === "finishing" ? "Finishing…" : "Listening…"}
+            </span>
+            <Btn size="sm" icon={CheckCircle2} onClick={stopAndFill} disabled={status === "finishing"}>Stop &amp; Fill</Btn>
+            <Btn size="sm" variant="ghost" onClick={cancel}>Cancel</Btn>
+          </>
+        )}
+        <button type="button" className="text-xs underline ml-auto" style={{ color: C.inkMuted }} onClick={() => setShowHelp(!showHelp)}>
+          {showHelp ? "Hide" : "How to speak"}
+        </button>
+      </div>
+      {showHelp && (
+        <div className="text-xs mt-2 flex flex-col gap-1" style={{ color: C.inkMuted }}>
+          <p>Say each medicine as <strong>name, dose, how often, how long</strong>, then optionally <strong>quantity</strong> and instructions. Say <strong>"next"</strong> between medicines.</p>
+          <p className="italic">"Letrozole 2.5 mg once daily for 5 days, quantity 5 tablets, from day 2. Next, Folic acid 5 mg once daily for 3 months after food."</p>
+          <p>How often: once / twice / thrice daily, OD, BD, TDS, 1-0-1, SOS, stat, weekly, alternate days. For free-text instructions say <strong>"instructions"</strong> then the text.</p>
+          <p>At the end, say <strong>"advice"</strong> followed by the advice, and <strong>"doctor"</strong> followed by the name. <strong>"Date tomorrow"</strong> or <strong>"date 5th November"</strong> changes the date.</p>
+        </div>
+      )}
+      {(heard || interim) && (
+        <p className="text-sm mt-2" style={{ color: C.ink }}>{heard} <span style={{ color: C.inkFaint }}>{interim}</span></p>
+      )}
+      {summary && <p className="text-xs mt-2 font-medium" style={{ color: C.primaryDark }}>{summary}</p>}
+      {error && <p className="text-xs mt-2 flex items-start gap-1.5" style={{ color: C.brick }}><AlertCircle size={14} className="shrink-0 mt-px" />{error}</p>}
+    </div>
+  );
+}
+
+/* Under a dictated medicine row: what was heard, and — when the name
+   wasn't a clear match for the drug list — a warning with one-tap
+   suggestions. Cleared as soon as the doctor changes the name. */
+function VoiceMatchNote({ match, onPick }) {
+  const tone = match.status === "ok" ? { bg: C.greenTint, fg: C.green }
+    : match.status === "check" ? { bg: C.goldTint, fg: C.gold } : { bg: C.brickTint, fg: C.brick };
+  const message = match.status === "ok" ? "matched the drug list"
+    : match.status === "check" ? "not a certain match — please confirm the drug name"
+    : "not in the drug list — check the spelling or pick a suggestion";
+  return (
+    <div className="col-span-full text-xs rounded-lg px-2.5 py-1.5 flex items-center gap-2 flex-wrap" style={{ background: tone.bg, color: tone.fg }}>
+      <Mic size={12} className="shrink-0" />
+      <span>Heard “{match.heard}” — {message}</span>
+      {match.status !== "ok" && match.suggestions.map((s) => (
+        <button key={s} type="button" onClick={() => onPick(s)} className="rounded-full px-2 py-0.5 font-medium"
+          style={{ background: "#fff", border: `1px solid ${tone.fg}`, color: tone.fg }}>{s}</button>
+      ))}
+    </div>
+  );
+}
+
 function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initial, forWhom = "Wife", forLabel }) {
   const resolvedFor = initial?.for || forWhom;
   const [date, setDate] = useState(initial?.date || todayISO());
@@ -2363,7 +2513,25 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
     initial?.medicines?.length ? initial.medicines.map((m) => ({ ...m })) : [{ id: uid(), name: "", dosage: "", frequency: "", duration: "", quantity: "", instructions: "" }]
   );
   const addMed = () => setMeds([...meds, { id: uid(), name: "", dosage: "", frequency: "", duration: "", quantity: "", instructions: "" }]);
-  const updMed = (id, k, v) => setMeds(meds.map((m) => m.id === id ? { ...m, [k]: v } : m));
+  // How each dictated medicine's name was matched (see VoiceMatchNote) —
+  // dropped once the doctor changes that name themselves.
+  const [voiceMatches, setVoiceMatches] = useState({});
+  const updMed = (id, k, v) => {
+    setMeds(meds.map((m) => m.id === id ? { ...m, [k]: v } : m));
+    if (k === "name") setVoiceMatches((prev) => _.omit(prev, id));
+  };
+  // Dictated medicines replace any still-empty rows and go after the rest;
+  // advice is added to what's already there.
+  const applyDictation = (r) => {
+    if (r.date) setDate(r.date);
+    if (r.doctor) setDoctor(r.doctor);
+    if (r.advice) setAdvice((prev) => (prev.trim() ? `${prev.trim()}
+${r.advice}` : r.advice));
+    if (!r.medicines.length) return;
+    const added = r.medicines.map(({ match, ...m }) => ({ id: uid(), ...m }));
+    setMeds((prev) => [...prev.filter((m) => m.name || m.dosage || m.frequency || m.duration || m.quantity || m.instructions), ...added]);
+    setVoiceMatches((prev) => ({ ...prev, ..._.fromPairs(added.map((m, i) => [m.id, r.medicines[i].match])) }));
+  };
   const rmMed = (id) => setMeds(meds.filter((m) => m.id !== id));
   // Same drug, another dose/duration (e.g. a tapering schedule) — carries
   // the drug name over so the doctor doesn't have to pick it again, and
@@ -2388,6 +2556,7 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
 
   return (
     <ModalShell title={`${initial ? "Edit" : "New"} Prescription — ${forLabel || resolvedFor}`} onClose={onClose} wide>
+      <VoiceDictation drugOptions={liveDrugOptions} onResult={applyDictation} />
       <div className="grid sm:grid-cols-2 gap-4 mb-4">
         <TextField label="Date" type="date" value={date} onChange={setDate} />
         <TextField label="Prescribing Doctor" value={doctor} onChange={setDoctor} />
@@ -2395,7 +2564,9 @@ function PrescriptionModal({ onClose, onSave, drugOptions = DRUG_OPTIONS, initia
       <p className="text-xs font-medium mb-2" style={{ color: C.inkMuted }}>Medicines</p>
       <div className="flex flex-col gap-3 mb-3">
         {meds.map((m) => (
-          <div key={m.id} className="grid sm:grid-cols-6 gap-2 items-start rounded-xl p-3" style={{ background: C.slateTint }}>
+          <div key={m.id} className="grid sm:grid-cols-6 gap-2 items-start rounded-xl p-3"
+            style={{ background: C.slateTint, border: voiceMatches[m.id] && voiceMatches[m.id].status !== "ok" ? `2px solid ${voiceMatches[m.id].status === "check" ? C.gold : C.brick}` : "2px solid transparent" }}>
+            {voiceMatches[m.id] && <VoiceMatchNote match={voiceMatches[m.id]} onPick={(name) => updMed(m.id, "name", name)} />}
             <DropdownOtherField label="Drug Name" value={m.name} onChange={(v) => updMed(m.id, "name", v.toUpperCase())} options={liveDrugOptions} />
             <DropdownOtherField label="Dose" value={m.dosage} onChange={(v) => updMed(m.id, "dosage", v)} options={DOSE_OPTIONS} />
             <DropdownOtherField label="Frequency" value={m.frequency} onChange={(v) => updMed(m.id, "frequency", v)} options={FREQUENCY_OPTIONS} />
